@@ -25,21 +25,20 @@
 
 package org.opensearch.lucene.misc.search.similarity;
 
-import java.util.Random;
-
 import org.apache.lucene.misc.search.similarity.LegacyBM25Similarity;
 import org.apache.lucene.search.similarities.BM25Similarity;
-import org.apache.lucene.tests.search.similarities.BaseSimilarityTestCase;
 import org.apache.lucene.search.similarities.Similarity;
+import org.apache.lucene.tests.search.similarities.BaseSimilarityTestCase;
+
+import java.util.Random;
 
 @Deprecated
 public class LegacyBM25SimilarityTests extends BaseSimilarityTestCase {
 
     public void testIllegalK1() {
-        IllegalArgumentException expected = expectThrows(
-            IllegalArgumentException.class,
-            () -> { new LegacyBM25Similarity(Float.POSITIVE_INFINITY, 0.75f); }
-        );
+        IllegalArgumentException expected = expectThrows(IllegalArgumentException.class, () -> {
+            new LegacyBM25Similarity(Float.POSITIVE_INFINITY, 0.75f);
+        });
         assertTrue(expected.getMessage().contains("illegal k1 value"));
 
         expected = expectThrows(IllegalArgumentException.class, () -> { new LegacyBM25Similarity(-1, 0.75f); });

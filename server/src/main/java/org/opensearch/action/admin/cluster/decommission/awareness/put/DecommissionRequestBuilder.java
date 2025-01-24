@@ -12,13 +12,15 @@ import org.opensearch.action.ActionType;
 import org.opensearch.action.support.clustermanager.ClusterManagerNodeOperationRequestBuilder;
 import org.opensearch.client.OpenSearchClient;
 import org.opensearch.cluster.decommission.DecommissionAttribute;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.unit.TimeValue;
 
 /**
  * Register decommission request builder
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "2.4.0")
 public class DecommissionRequestBuilder extends ClusterManagerNodeOperationRequestBuilder<
     DecommissionRequest,
     DecommissionResponse,
@@ -44,6 +46,17 @@ public class DecommissionRequestBuilder extends ClusterManagerNodeOperationReque
 
     public DecommissionRequestBuilder setNoDelay(boolean noDelay) {
         request.setNoDelay(noDelay);
+        return this;
+    }
+
+    /**
+     * Sets request id for decommission request
+     *
+     * @param requestID for decommission request
+     * @return current object
+     */
+    public DecommissionRequestBuilder requestID(String requestID) {
+        request.setRequestID(requestID);
         return this;
     }
 }

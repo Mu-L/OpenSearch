@@ -31,11 +31,10 @@
 
 package org.opensearch.geo.search.aggregations.bucket.geogrid;
 
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.io.stream.Writeable;
 import org.opensearch.common.util.LongObjectPagedHashMap;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.InternalAggregations;
 import org.opensearch.search.aggregations.InternalMultiBucketAggregation;
@@ -69,7 +68,7 @@ public abstract class BaseGeoGrid<B extends BaseGeoGridBucket> extends InternalM
         this.buckets = buckets;
     }
 
-    protected abstract Writeable.Reader<B> getBucketReader();
+    protected abstract Reader<B> getBucketReader();
 
     /**
      * Read from a stream.

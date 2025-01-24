@@ -43,34 +43,35 @@ import org.opensearch.client.transport.NoNodeAvailableException;
 import org.opensearch.cluster.block.ClusterBlockException;
 import org.opensearch.cluster.coordination.NoClusterManagerBlockService;
 import org.opensearch.cluster.node.DiscoveryNode;
-import org.opensearch.common.ParsingException;
-import org.opensearch.common.Strings;
 import org.opensearch.common.UUIDs;
-import org.opensearch.common.bytes.BytesArray;
-import org.opensearch.common.bytes.BytesReference;
 import org.opensearch.common.collect.Tuple;
-import org.opensearch.common.xcontent.ToXContent;
-import org.opensearch.common.xcontent.XContent;
-import org.opensearch.common.xcontent.XContentBuilder;
 import org.opensearch.common.xcontent.XContentFactory;
-import org.opensearch.common.xcontent.XContentHelper;
-import org.opensearch.common.xcontent.XContentLocation;
-import org.opensearch.common.xcontent.XContentParseException;
-import org.opensearch.common.xcontent.XContentParser;
 import org.opensearch.common.xcontent.XContentType;
-import org.opensearch.index.Index;
+import org.opensearch.core.common.ParsingException;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.bytes.BytesArray;
+import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.index.Index;
+import org.opensearch.core.index.shard.ShardId;
+import org.opensearch.core.rest.RestStatus;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.ToXContent;
+import org.opensearch.core.xcontent.XContent;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentLocation;
+import org.opensearch.core.xcontent.XContentParseException;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.IndexNotFoundException;
 import org.opensearch.index.query.QueryShardException;
 import org.opensearch.index.shard.IndexShardRecoveringException;
-import org.opensearch.index.shard.ShardId;
 import org.opensearch.node.NodeClosedException;
 import org.opensearch.repositories.RepositoryException;
-import org.opensearch.rest.RestStatus;
 import org.opensearch.script.ScriptException;
 import org.opensearch.search.SearchContextMissingException;
 import org.opensearch.search.SearchParseException;
 import org.opensearch.search.SearchShardTarget;
 import org.opensearch.search.internal.ShardSearchContextId;
+import org.opensearch.snapshots.ConcurrentSnapshotExecutionException;
 import org.opensearch.test.OpenSearchTestCase;
 import org.opensearch.transport.RemoteTransportException;
 
@@ -119,6 +120,9 @@ public class OpenSearchExceptionTests extends OpenSearchTestCase {
 
         exception = new RemoteTransportException("test", new IllegalStateException("foobar"));
         assertThat(exception.status(), equalTo(RestStatus.INTERNAL_SERVER_ERROR));
+
+        exception = new ConcurrentSnapshotExecutionException("testRepo", "testSnap", "test");
+        assertSame(exception.status(), RestStatus.CONFLICT);
     }
 
     public void testGuessRootCause() {
@@ -250,7 +254,7 @@ public class OpenSearchExceptionTests extends OpenSearchTestCase {
             String expected = "{\"type\":\"search_phase_execution_exception\",\"reason\":\"all shards failed\",\"phase\":\"search\","
                 + "\"grouped\":true,\"failed_shards\":[{\"shard\":1,\"index\":\"foo\",\"node\":\"node_1\",\"reason\":"
                 + "{\"type\":\"parsing_exception\",\"reason\":\"foobar\",\"line\":1,\"col\":2}}]}";
-            assertEquals(expected, Strings.toString(builder));
+            assertEquals(expected, builder.toString());
         }
         {
             ShardSearchFailure failure = new ShardSearchFailure(
@@ -279,7 +283,7 @@ public class OpenSearchExceptionTests extends OpenSearchTestCase {
                 + "\"reason\":{\"type\":\"parsing_exception\",\"reason\":\"foobar\",\"line\":1,\"col\":2}},{\"shard\":1,"
                 + "\"index\":\"foo1\",\"node\":\"node_1\",\"reason\":{\"type\":\"query_shard_exception\",\"reason\":\"foobar\","
                 + "\"index\":\"foo1\",\"index_uuid\":\"_na_\"}}]}";
-            assertEquals(expected, Strings.toString(builder));
+            assertEquals(expected, builder.toString());
         }
         {
             ShardSearchFailure failure = new ShardSearchFailure(
@@ -306,7 +310,7 @@ public class OpenSearchExceptionTests extends OpenSearchTestCase {
                 + "\"phase\":\"search\",\"grouped\":true,\"failed_shards\":[{\"shard\":1,\"index\":\"foo\",\"node\":\"node_1\","
                 + "\"reason\":{\"type\":\"parsing_exception\",\"reason\":\"foobar\",\"line\":1,\"col\":2}}],"
                 + "\"caused_by\":{\"type\":\"null_pointer_exception\",\"reason\":null}}";
-            assertEquals(expected, Strings.toString(builder));
+            assertEquals(expected, builder.toString());
         }
     }
 
@@ -412,11 +416,11 @@ public class OpenSearchExceptionTests extends OpenSearchTestCase {
                 Collections.singletonMap(OpenSearchException.REST_EXCEPTION_SKIP_STACK_TRACE, "false")
             );
             String actual;
-            try (XContentBuilder builder = XContentBuilder.builder(XContentType.JSON.xContent())) {
+            try (XContentBuilder builder = XContentBuilder.builder(MediaTypeRegistry.JSON.xContent())) {
                 builder.startObject();
                 e.toXContent(builder, params);
                 builder.endObject();
-                actual = Strings.toString(builder);
+                actual = builder.toString();
             }
             assertThat(
                 actual,
@@ -449,8 +453,8 @@ public class OpenSearchExceptionTests extends OpenSearchTestCase {
 
         { // test equivalence
             OpenSearchException ex = new RemoteTransportException("foobar", new FileNotFoundException("foo not found"));
-            String toXContentString = Strings.toString(ex);
-            String throwableString = Strings.toString((builder, params) -> {
+            String toXContentString = Strings.toString(MediaTypeRegistry.JSON, ex);
+            String throwableString = Strings.toString(MediaTypeRegistry.JSON, (builder, params) -> {
                 OpenSearchException.generateThrowableXContent(builder, params, ex);
                 return builder;
             });
@@ -515,7 +519,7 @@ public class OpenSearchExceptionTests extends OpenSearchTestCase {
         assertExceptionAsJson(e, expectedJson);
 
         OpenSearchException parsed;
-        try (XContentParser parser = createParser(XContentType.JSON.xContent(), expectedJson)) {
+        try (XContentParser parser = createParser(MediaTypeRegistry.JSON.xContent(), expectedJson)) {
             assertEquals(XContentParser.Token.START_OBJECT, parser.nextToken());
             parsed = OpenSearchException.fromXContent(parser);
             assertEquals(XContentParser.Token.END_OBJECT, parser.currentToken());
@@ -742,7 +746,7 @@ public class OpenSearchExceptionTests extends OpenSearchTestCase {
         BytesReference throwableBytes = toShuffledXContent((builder, params) -> {
             OpenSearchException.generateThrowableXContent(builder, params, throwable);
             return builder;
-        }, xContent.type(), ToXContent.EMPTY_PARAMS, randomBoolean());
+        }, xContent.mediaType(), ToXContent.EMPTY_PARAMS, randomBoolean());
 
         OpenSearchException parsedException;
         try (XContentParser parser = createParser(xContent, throwableBytes)) {
@@ -774,7 +778,7 @@ public class OpenSearchExceptionTests extends OpenSearchTestCase {
             // Prints a null failure using generateFailureXContent()
             OpenSearchException.generateFailureXContent(builder, params, null, randomBoolean());
             return builder;
-        }, xContent.type(), ToXContent.EMPTY_PARAMS, randomBoolean());
+        }, xContent.mediaType(), ToXContent.EMPTY_PARAMS, randomBoolean());
 
         OpenSearchException parsedFailure;
         try (XContentParser parser = createParser(xContent, failureBytes)) {
@@ -798,7 +802,7 @@ public class OpenSearchExceptionTests extends OpenSearchTestCase {
         BytesReference failureBytes = toShuffledXContent((builder, params) -> {
             OpenSearchException.generateFailureXContent(builder, params, failure, false);
             return builder;
-        }, xContent.type(), ToXContent.EMPTY_PARAMS, randomBoolean());
+        }, xContent.mediaType(), ToXContent.EMPTY_PARAMS, randomBoolean());
 
         try (XContentParser parser = createParser(xContent, failureBytes)) {
             failureBytes = BytesReference.bytes(shuffleXContent(parser, randomBoolean()));
@@ -952,7 +956,7 @@ public class OpenSearchExceptionTests extends OpenSearchTestCase {
         BytesReference failureBytes = toShuffledXContent((builder, params) -> {
             OpenSearchException.generateFailureXContent(builder, params, finalFailure, true);
             return builder;
-        }, xContent.type(), ToXContent.EMPTY_PARAMS, randomBoolean());
+        }, xContent.mediaType(), ToXContent.EMPTY_PARAMS, randomBoolean());
 
         try (XContentParser parser = createParser(xContent, failureBytes)) {
             failureBytes = BytesReference.bytes(shuffleXContent(parser, randomBoolean()));
@@ -972,13 +976,13 @@ public class OpenSearchExceptionTests extends OpenSearchTestCase {
 
     /**
      * Builds a {@link ToXContent} using a JSON XContentBuilder and compares the result to the given json in string format.
-     *
+     * <p>
      * By default, the stack trace of the exception is not rendered. The parameter `errorTrace` forces the stack trace to
      * be rendered like the REST API does when the "error_trace" parameter is set to true.
      */
     private static void assertToXContentAsJson(ToXContent e, String expectedJson) throws IOException {
-        BytesReference actual = XContentHelper.toXContent(e, XContentType.JSON, randomBoolean());
-        assertToXContentEquivalent(new BytesArray(expectedJson), actual, XContentType.JSON);
+        BytesReference actual = org.opensearch.core.xcontent.XContentHelper.toXContent(e, MediaTypeRegistry.JSON, randomBoolean());
+        assertToXContentEquivalent(new BytesArray(expectedJson), actual, MediaTypeRegistry.JSON);
     }
 
     private static void assertExceptionAsJson(Exception e, String expectedJson) throws IOException {

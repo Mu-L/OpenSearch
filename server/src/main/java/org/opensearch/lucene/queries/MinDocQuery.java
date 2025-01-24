@@ -42,6 +42,7 @@ import org.apache.lucene.search.Query;
 import org.apache.lucene.search.QueryVisitor;
 import org.apache.lucene.search.ScoreMode;
 import org.apache.lucene.search.Scorer;
+import org.apache.lucene.search.ScorerSupplier;
 import org.apache.lucene.search.Weight;
 
 import java.io.IOException;
@@ -86,7 +87,8 @@ public final class MinDocQuery extends Query {
     }
 
     @Override
-    public Query rewrite(IndexReader reader) throws IOException {
+    public Query rewrite(IndexSearcher searcher) throws IOException {
+        final IndexReader reader = searcher.getIndexReader();
         if (Objects.equals(reader.getContext().id(), readerId) == false) {
             return new MinDocQuery(minDoc, reader.getContext().id());
         }
@@ -102,14 +104,15 @@ public final class MinDocQuery extends Query {
         }
         return new ConstantScoreWeight(this, boost) {
             @Override
-            public Scorer scorer(LeafReaderContext context) throws IOException {
+            public ScorerSupplier scorerSupplier(LeafReaderContext context) throws IOException {
                 final int maxDoc = context.reader().maxDoc();
                 if (context.docBase + maxDoc <= minDoc) {
                     return null;
                 }
                 final int segmentMinDoc = Math.max(0, minDoc - context.docBase);
                 final DocIdSetIterator disi = new MinDocIterator(segmentMinDoc, maxDoc);
-                return new ConstantScoreScorer(this, score(), scoreMode, disi);
+                final Scorer scorer = new ConstantScoreScorer(score(), scoreMode, disi);
+                return new DefaultScorerSupplier(scorer);
             }
 
             @Override

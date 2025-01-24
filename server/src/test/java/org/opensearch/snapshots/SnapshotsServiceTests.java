@@ -33,40 +33,69 @@
 package org.opensearch.snapshots;
 
 import org.opensearch.Version;
+import org.opensearch.action.support.ActionFilters;
 import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.SnapshotsInProgress;
 import org.opensearch.cluster.metadata.IndexMetadata;
+import org.opensearch.cluster.metadata.IndexNameExpressionResolver;
 import org.opensearch.cluster.metadata.Metadata;
+import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.node.DiscoveryNodes;
 import org.opensearch.cluster.routing.IndexRoutingTable;
 import org.opensearch.cluster.routing.IndexShardRoutingTable;
 import org.opensearch.cluster.routing.RoutingTable;
 import org.opensearch.cluster.routing.ShardRoutingState;
 import org.opensearch.cluster.routing.TestShardRouting;
+import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.UUIDs;
-import org.opensearch.common.collect.ImmutableOpenMap;
+import org.opensearch.common.collect.Tuple;
+import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.index.Index;
-import org.opensearch.index.shard.ShardId;
+import org.opensearch.common.util.concurrent.OpenSearchExecutors;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.index.Index;
+import org.opensearch.core.index.shard.ShardId;
+import org.opensearch.indices.RemoteStoreSettings;
 import org.opensearch.repositories.IndexId;
+import org.opensearch.repositories.IndexMetaDataGenerations;
+import org.opensearch.repositories.RepositoriesService;
+import org.opensearch.repositories.Repository;
+import org.opensearch.repositories.RepositoryData;
+import org.opensearch.repositories.RepositoryException;
 import org.opensearch.repositories.RepositoryShardId;
+import org.opensearch.repositories.ShardGenerations;
 import org.opensearch.test.OpenSearchTestCase;
+import org.opensearch.threadpool.ThreadPool;
+import org.opensearch.transport.TransportService;
 
+import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
+import org.mockito.ArgumentCaptor;
+
 import static org.opensearch.cluster.metadata.IndexMetadata.SETTING_VERSION_CREATED;
+import static org.opensearch.snapshots.SnapshotsService.getRepoSnapshotUUIDTuple;
 import static org.hamcrest.Matchers.is;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 public class SnapshotsServiceTests extends OpenSearchTestCase {
 
     public void testNoopShardStateUpdates() throws Exception {
         final String repoName = "test-repo";
         final Snapshot snapshot = snapshot(repoName, "snapshot-1");
-        final SnapshotsInProgress.Entry snapshotNoShards = snapshotEntry(snapshot, Collections.emptyList(), ImmutableOpenMap.of());
+        final SnapshotsInProgress.Entry snapshotNoShards = snapshotEntry(snapshot, Collections.emptyList(), Map.of());
 
         final String indexName1 = "index-1";
         final ShardId shardId1 = new ShardId(index(indexName1), 0);
@@ -128,7 +157,7 @@ public class SnapshotsServiceTests extends OpenSearchTestCase {
         final SnapshotsInProgress.Entry snapshotSingleShard = snapshotEntry(
             sn1,
             Collections.singletonList(indexId1),
-            ImmutableOpenMap.builder(shardsMap(shardId1, shardInitStatus)).fPut(shardId2, shardInitStatus).build()
+            Map.of(shardId1, shardInitStatus, shardId2, shardInitStatus)
         );
 
         assertThat(snapshotSingleShard.state(), is(SnapshotsInProgress.State.STARTED));
@@ -178,7 +207,7 @@ public class SnapshotsServiceTests extends OpenSearchTestCase {
         final SnapshotsInProgress.Entry cloneMultipleShards = cloneEntry(
             targetSnapshot,
             sourceSnapshot.getSnapshotId(),
-            ImmutableOpenMap.builder(clonesMap(shardId1, shardInitStatus)).fPut(shardId2, shardInitStatus).build()
+            Map.of(shardId1, shardInitStatus, shardId2, shardInitStatus)
         );
 
         assertThat(cloneMultipleShards.state(), is(SnapshotsInProgress.State.STARTED));
@@ -404,22 +433,465 @@ public class SnapshotsServiceTests extends OpenSearchTestCase {
         assertIsNoop(updatedClusterState, completeShardClone);
     }
 
+    /**
+     * Tests the runReadyClone method when remote store index shallow copy is disabled.
+     * It verifies that:
+     * 1. getRepositoryData is never called
+     * 2. cloneShardSnapshot is called with the correct parameters
+     */
+    public void testRunReadyCloneWithRemoteStoreIndexShallowCopyDisabled() throws Exception {
+        String repoName = "test-repo";
+        Snapshot target = snapshot(repoName, "target-snapshot");
+        SnapshotId sourceSnapshot = new SnapshotId("source-snapshot", uuid());
+        RepositoryShardId repoShardId = new RepositoryShardId(indexId("test-index"), 0);
+        SnapshotsInProgress.ShardSnapshotStatus shardStatusBefore = initShardStatus(uuid());
+
+        Repository mockRepository = mock(Repository.class);
+        try (SnapshotsService snapshotsService = createSnapshotsService()) {
+            snapshotsService.runReadyClone(target, sourceSnapshot, shardStatusBefore, repoShardId, mockRepository, false);
+            verify(mockRepository, never()).getRepositoryData(any());
+            verify(mockRepository).cloneShardSnapshot(
+                eq(sourceSnapshot),
+                eq(target.getSnapshotId()),
+                eq(repoShardId),
+                eq(shardStatusBefore.generation()),
+                any()
+            );
+        }
+    }
+
+    /**
+     * Tests the runReadyClone method when remote store index shallow copy is enabled.
+     * It verifies that:
+     * 1. getRepositoryData is called
+     * 2. cloneRemoteStoreIndexShardSnapshot is called with the correct parameters
+     * This test simulates a scenario where the index has remote store enabled.
+     */
+
+    public void testRunReadyCloneWithRemoteStoreIndexShallowCopyEnabled() throws Exception {
+        String repoName = "test-repo";
+        Snapshot target = snapshot(repoName, "target-snapshot");
+        SnapshotId sourceSnapshot = new SnapshotId("source-snapshot", uuid());
+        RepositoryShardId repoShardId = new RepositoryShardId(indexId("test-index"), 0);
+        SnapshotsInProgress.ShardSnapshotStatus shardStatusBefore = initShardStatus(uuid());
+
+        Repository mockRepository = mock(Repository.class);
+
+        // Create a real RepositoryData instance
+        RepositoryData repositoryData = new RepositoryData(
+            RepositoryData.EMPTY_REPO_GEN,
+            Collections.singletonMap(sourceSnapshot.getName(), sourceSnapshot),
+            Collections.emptyMap(),
+            Collections.emptyMap(),
+            Collections.emptyMap(),
+            ShardGenerations.EMPTY,
+            IndexMetaDataGenerations.EMPTY
+        );
+
+        // Mock the getRepositoryData method to use the ActionListener
+        doAnswer(invocation -> {
+            ActionListener<RepositoryData> listener = invocation.getArgument(0);
+            listener.onResponse(repositoryData);
+            return null;
+        }).when(mockRepository).getRepositoryData(any(ActionListener.class));
+
+        IndexMetadata mockIndexMetadata = mock(IndexMetadata.class);
+        when(mockRepository.getSnapshotIndexMetaData(eq(repositoryData), eq(sourceSnapshot), any())).thenReturn(mockIndexMetadata);
+
+        Settings mockSettings = Settings.builder().put(IndexMetadata.SETTING_REMOTE_STORE_ENABLED, true).build();
+        when(mockIndexMetadata.getSettings()).thenReturn(mockSettings);
+
+        try (SnapshotsService snapshotsService = createSnapshotsService()) {
+            snapshotsService.runReadyClone(target, sourceSnapshot, shardStatusBefore, repoShardId, mockRepository, true);
+
+            // Verify that getRepositoryData was called
+            verify(mockRepository).getRepositoryData(any(ActionListener.class));
+
+            // Verify that cloneRemoteStoreIndexShardSnapshot was called with the correct arguments
+            verify(mockRepository).cloneRemoteStoreIndexShardSnapshot(
+                eq(sourceSnapshot),
+                eq(target.getSnapshotId()),
+                eq(repoShardId),
+                eq(shardStatusBefore.generation()),
+                any(),
+                any()
+            );
+        }
+    }
+
+    /**
+     * Tests the error handling in runReadyClone when a RepositoryException occurs.
+     * It verifies that:
+     * 1. getRepositoryData is called and throws an exception
+     * 2. Neither cloneShardSnapshot nor cloneRemoteStoreIndexShardSnapshot are called
+     */
+    public void testRunReadyCloneWithRepositoryException() throws Exception {
+        String repoName = "test-repo";
+        Snapshot target = snapshot(repoName, "target-snapshot");
+        SnapshotId sourceSnapshot = new SnapshotId("source-snapshot", uuid());
+        RepositoryShardId repoShardId = new RepositoryShardId(indexId("test-index"), 0);
+        SnapshotsInProgress.ShardSnapshotStatus shardStatusBefore = initShardStatus(uuid());
+
+        Repository mockRepository = mock(Repository.class);
+
+        // Mock the getRepositoryData method to throw an exception
+        doAnswer(invocation -> {
+            ActionListener<RepositoryData> listener = invocation.getArgument(0);
+            listener.onFailure(new RepositoryException(repoName, "Test exception"));
+            return null;
+        }).when(mockRepository).getRepositoryData(any(ActionListener.class));
+
+        try (SnapshotsService snapshotsService = createSnapshotsService()) {
+            snapshotsService.runReadyClone(target, sourceSnapshot, shardStatusBefore, repoShardId, mockRepository, true);
+
+            // Verify that getRepositoryData was called
+            verify(mockRepository).getRepositoryData(any(ActionListener.class));
+
+            // Verify that neither cloneShardSnapshot nor cloneRemoteStoreIndexShardSnapshot were called
+            verify(mockRepository, never()).cloneShardSnapshot(any(), any(), any(), any(), any());
+            verify(mockRepository, never()).cloneRemoteStoreIndexShardSnapshot(any(), any(), any(), any(), any(), any());
+        }
+    }
+
+    /**
+     * Tests the runReadyClone method when remote store index shallow copy is globally enabled,
+     * but disabled for the specific index.
+     * It verifies that:
+     * 1. getRepositoryData is called
+     * 2. cloneShardSnapshot is called instead of cloneRemoteStoreIndexShardSnapshot
+     */
+    public void testRunReadyCloneWithRemoteStoreIndexShallowCopyEnabledButIndexDisabled() throws Exception {
+        String repoName = "test-repo";
+        Snapshot target = snapshot(repoName, "target-snapshot");
+        SnapshotId sourceSnapshot = new SnapshotId("source-snapshot", uuid());
+        RepositoryShardId repoShardId = new RepositoryShardId(indexId("test-index"), 0);
+        SnapshotsInProgress.ShardSnapshotStatus shardStatusBefore = initShardStatus(uuid());
+
+        Repository mockRepository = mock(Repository.class);
+
+        RepositoryData repositoryData = new RepositoryData(
+            RepositoryData.EMPTY_REPO_GEN,
+            Collections.singletonMap(sourceSnapshot.getName(), sourceSnapshot),
+            Collections.emptyMap(),
+            Collections.emptyMap(),
+            Collections.emptyMap(),
+            ShardGenerations.EMPTY,
+            IndexMetaDataGenerations.EMPTY
+        );
+
+        doAnswer(invocation -> {
+            ActionListener<RepositoryData> listener = invocation.getArgument(0);
+            listener.onResponse(repositoryData);
+            return null;
+        }).when(mockRepository).getRepositoryData(any(ActionListener.class));
+
+        IndexMetadata mockIndexMetadata = mock(IndexMetadata.class);
+        when(mockRepository.getSnapshotIndexMetaData(eq(repositoryData), eq(sourceSnapshot), any())).thenReturn(mockIndexMetadata);
+
+        Settings mockSettings = Settings.builder().put(IndexMetadata.SETTING_REMOTE_STORE_ENABLED, false).build();
+        when(mockIndexMetadata.getSettings()).thenReturn(mockSettings);
+
+        try (SnapshotsService snapshotsService = createSnapshotsService()) {
+            snapshotsService.runReadyClone(target, sourceSnapshot, shardStatusBefore, repoShardId, mockRepository, true);
+
+            verify(mockRepository).getRepositoryData(any(ActionListener.class));
+            verify(mockRepository).cloneShardSnapshot(
+                eq(sourceSnapshot),
+                eq(target.getSnapshotId()),
+                eq(repoShardId),
+                eq(shardStatusBefore.generation()),
+                any()
+            );
+        }
+    }
+
+    /**
+     * Tests the error handling in runReadyClone when an IOException occurs while getting snapshot index metadata.
+     * It verifies that:
+     * 1. getRepositoryData is called
+     * 2. getSnapshotIndexMetaData throws an IOException
+     * 3. Neither cloneShardSnapshot nor cloneRemoteStoreIndexShardSnapshot are called
+     */
+    public void testRunReadyCloneWithIOException() throws Exception {
+        String repoName = "test-repo";
+        Snapshot target = snapshot(repoName, "target-snapshot");
+        SnapshotId sourceSnapshot = new SnapshotId("source-snapshot", uuid());
+        RepositoryShardId repoShardId = new RepositoryShardId(indexId("test-index"), 0);
+        SnapshotsInProgress.ShardSnapshotStatus shardStatusBefore = initShardStatus(uuid());
+
+        Repository mockRepository = mock(Repository.class);
+
+        RepositoryData repositoryData = new RepositoryData(
+            RepositoryData.EMPTY_REPO_GEN,
+            Collections.singletonMap(sourceSnapshot.getName(), sourceSnapshot),
+            Collections.emptyMap(),
+            Collections.emptyMap(),
+            Collections.emptyMap(),
+            ShardGenerations.EMPTY,
+            IndexMetaDataGenerations.EMPTY
+        );
+
+        doAnswer(invocation -> {
+            ActionListener<RepositoryData> listener = invocation.getArgument(0);
+            listener.onResponse(repositoryData);
+            return null;
+        }).when(mockRepository).getRepositoryData(any(ActionListener.class));
+
+        when(mockRepository.getSnapshotIndexMetaData(eq(repositoryData), eq(sourceSnapshot), any())).thenThrow(
+            new IOException("Test IO Exception")
+        );
+
+        try (SnapshotsService snapshotsService = createSnapshotsService()) {
+            snapshotsService.runReadyClone(target, sourceSnapshot, shardStatusBefore, repoShardId, mockRepository, true);
+
+            verify(mockRepository).getRepositoryData(any(ActionListener.class));
+            verify(mockRepository).getSnapshotIndexMetaData(eq(repositoryData), eq(sourceSnapshot), any());
+            verify(mockRepository, never()).cloneShardSnapshot(any(), any(), any(), any(), any());
+            verify(mockRepository, never()).cloneRemoteStoreIndexShardSnapshot(any(), any(), any(), any(), any(), any());
+        }
+    }
+
+    /**
+     * Tests the completion listener functionality in runReadyClone when the operation is successful.
+     * It verifies that:
+     * 1. The clone operation completes successfully
+     * 2. The correct ShardSnapshotUpdate is submitted to the cluster state
+     */
+    public void testRunReadyCloneCompletionListener() throws Exception {
+        String repoName = "test-repo";
+        Snapshot target = snapshot(repoName, "target-snapshot");
+        SnapshotId sourceSnapshot = new SnapshotId("source-snapshot", uuid());
+        RepositoryShardId repoShardId = new RepositoryShardId(indexId("test-index"), 0);
+        SnapshotsInProgress.ShardSnapshotStatus shardStatusBefore = initShardStatus(uuid());
+
+        Repository mockRepository = mock(Repository.class);
+
+        RepositoryData repositoryData = new RepositoryData(
+            RepositoryData.EMPTY_REPO_GEN,
+            Collections.singletonMap(sourceSnapshot.getName(), sourceSnapshot),
+            Collections.emptyMap(),
+            Collections.emptyMap(),
+            Collections.emptyMap(),
+            ShardGenerations.EMPTY,
+            IndexMetaDataGenerations.EMPTY
+        );
+
+        doAnswer(invocation -> {
+            ActionListener<RepositoryData> listener = invocation.getArgument(0);
+            listener.onResponse(repositoryData);
+            return null;
+        }).when(mockRepository).getRepositoryData(any(ActionListener.class));
+
+        IndexMetadata mockIndexMetadata = mock(IndexMetadata.class);
+        when(mockRepository.getSnapshotIndexMetaData(eq(repositoryData), eq(sourceSnapshot), any())).thenReturn(mockIndexMetadata);
+
+        Settings mockSettings = Settings.builder().put(IndexMetadata.SETTING_REMOTE_STORE_ENABLED, true).build();
+        when(mockIndexMetadata.getSettings()).thenReturn(mockSettings);
+
+        String newGeneration = "new_generation";
+        doAnswer(invocation -> {
+            ActionListener<String> listener = invocation.getArgument(5);
+            listener.onResponse(newGeneration);
+            return null;
+        }).when(mockRepository).cloneRemoteStoreIndexShardSnapshot(any(), any(), any(), any(), any(), any(ActionListener.class));
+
+        ClusterService mockClusterService = mock(ClusterService.class);
+        DiscoveryNode localNode = new DiscoveryNode("local", buildNewFakeTransportAddress(), Version.CURRENT);
+        when(mockClusterService.localNode()).thenReturn(localNode);
+
+        SnapshotsService snapshotsService = createSnapshotsService(mockClusterService);
+
+        snapshotsService.runReadyClone(target, sourceSnapshot, shardStatusBefore, repoShardId, mockRepository, true);
+
+        verify(mockRepository).getRepositoryData(any(ActionListener.class));
+        verify(mockRepository).cloneRemoteStoreIndexShardSnapshot(
+            eq(sourceSnapshot),
+            eq(target.getSnapshotId()),
+            eq(repoShardId),
+            eq(shardStatusBefore.generation()),
+            any(),
+            any()
+        );
+
+        // Verify that innerUpdateSnapshotState was called with the correct arguments
+        ArgumentCaptor<SnapshotsService.ShardSnapshotUpdate> updateCaptor = ArgumentCaptor.forClass(
+            SnapshotsService.ShardSnapshotUpdate.class
+        );
+        verify(mockClusterService).submitStateUpdateTask(eq("update snapshot state"), updateCaptor.capture(), any(), any(), any());
+
+        SnapshotsService.ShardSnapshotUpdate capturedUpdate = updateCaptor.getValue();
+        SnapshotsInProgress.ShardSnapshotStatus expectedStatus = new SnapshotsInProgress.ShardSnapshotStatus(
+            localNode.getId(),
+            SnapshotsInProgress.ShardState.SUCCESS,
+            newGeneration
+        );
+        SnapshotsService.ShardSnapshotUpdate expectedUpdate = new SnapshotsService.ShardSnapshotUpdate(target, repoShardId, expectedStatus);
+        assertEquals(expectedUpdate.hashCode(), capturedUpdate.hashCode());
+    }
+
+    /**
+     * Tests the completion listener functionality in runReadyClone when the operation fails.
+     * It verifies that:
+     * 1. The clone operation fails with an exception
+     * 2. The correct failed ShardSnapshotUpdate is submitted to the cluster state
+     */
+    public void testRunReadyCloneCompletionListenerFailure() throws Exception {
+        String repoName = "test-repo";
+        Snapshot target = snapshot(repoName, "target-snapshot");
+        SnapshotId sourceSnapshot = new SnapshotId("source-snapshot", uuid());
+        RepositoryShardId repoShardId = new RepositoryShardId(indexId("test-index"), 0);
+        SnapshotsInProgress.ShardSnapshotStatus shardStatusBefore = initShardStatus(uuid());
+
+        Repository mockRepository = mock(Repository.class);
+
+        RepositoryData repositoryData = new RepositoryData(
+            RepositoryData.EMPTY_REPO_GEN,
+            Collections.singletonMap(sourceSnapshot.getName(), sourceSnapshot),
+            Collections.emptyMap(),
+            Collections.emptyMap(),
+            Collections.emptyMap(),
+            ShardGenerations.EMPTY,
+            IndexMetaDataGenerations.EMPTY
+        );
+
+        doAnswer(invocation -> {
+            ActionListener<RepositoryData> listener = invocation.getArgument(0);
+            listener.onResponse(repositoryData);
+            return null;
+        }).when(mockRepository).getRepositoryData(any(ActionListener.class));
+
+        IndexMetadata mockIndexMetadata = mock(IndexMetadata.class);
+        when(mockRepository.getSnapshotIndexMetaData(eq(repositoryData), eq(sourceSnapshot), any())).thenReturn(mockIndexMetadata);
+
+        Settings mockSettings = Settings.builder().put(IndexMetadata.SETTING_REMOTE_STORE_ENABLED, true).build();
+        when(mockIndexMetadata.getSettings()).thenReturn(mockSettings);
+
+        Exception testException = new RuntimeException("Test exception");
+        doAnswer(invocation -> {
+            ActionListener<String> listener = invocation.getArgument(5);
+            listener.onFailure(testException);
+            return null;
+        }).when(mockRepository).cloneRemoteStoreIndexShardSnapshot(any(), any(), any(), any(), any(), any(ActionListener.class));
+
+        ClusterService mockClusterService = mock(ClusterService.class);
+        DiscoveryNode localNode = new DiscoveryNode("local", buildNewFakeTransportAddress(), Version.CURRENT);
+        when(mockClusterService.localNode()).thenReturn(localNode);
+
+        SnapshotsService snapshotsService = createSnapshotsService(mockClusterService);
+
+        snapshotsService.runReadyClone(target, sourceSnapshot, shardStatusBefore, repoShardId, mockRepository, true);
+
+        verify(mockRepository).getRepositoryData(any(ActionListener.class));
+        verify(mockRepository).cloneRemoteStoreIndexShardSnapshot(
+            eq(sourceSnapshot),
+            eq(target.getSnapshotId()),
+            eq(repoShardId),
+            eq(shardStatusBefore.generation()),
+            any(),
+            any()
+        );
+
+        ArgumentCaptor<SnapshotsService.ShardSnapshotUpdate> updateCaptor = ArgumentCaptor.forClass(
+            SnapshotsService.ShardSnapshotUpdate.class
+        );
+        verify(mockClusterService).submitStateUpdateTask(eq("update snapshot state"), updateCaptor.capture(), any(), any(), any());
+
+        SnapshotsService.ShardSnapshotUpdate capturedUpdate = updateCaptor.getValue();
+        SnapshotsInProgress.ShardSnapshotStatus expectedStatus = new SnapshotsInProgress.ShardSnapshotStatus(
+            localNode.getId(),
+            SnapshotsInProgress.ShardState.FAILED,
+            "failed to clone shard snapshot",
+            null
+        );
+        SnapshotsService.ShardSnapshotUpdate expectedUpdate = new SnapshotsService.ShardSnapshotUpdate(target, repoShardId, expectedStatus);
+        assertEquals(expectedUpdate.hashCode(), capturedUpdate.hashCode());
+    }
+
+    public void testGetRepoSnapshotUUIDTuple() {
+        String repoName = "repoName";
+        String pinningEntity = "repoName__OstrHGrERqaR__-597zHYQ";
+        Tuple<String, String> t = getRepoSnapshotUUIDTuple(pinningEntity);
+        assertEquals(repoName, t.v1());
+        assertEquals("OstrHGrERqaR__-597zHYQ", t.v2());
+    }
+
+    public void testIsOrphanPinnedEntity() {
+        String repoName = "repoName";
+        ArrayList<String> snapshotUUIDs = new ArrayList<>(
+            Arrays.asList("OouZCQ30TqypFBZGgk1C7g", "RSP6GLJfSO6SsMmUjZNAaA", "OstrHGrERqaR__-597zHYQ, Zjlnf8IHRxqFBijj0m52gw")
+        );
+
+        ArrayList<String> pinnedEntities = new ArrayList<>(
+            Arrays.asList(
+                "repoName__OouZCQ30TqypFBZGgk1C7g",
+                "repoName__RSP6GLJfSO6SsMmUjZNAaA",
+                "repoName__OstrHGrERqaR__-597zHYQ, Zjlnf8IHRxqFBijj0m52gw"
+            )
+        );
+
+        for (String pinnedEntity : pinnedEntities) {
+            assertFalse(SnapshotsService.isOrphanPinnedEntity(repoName, snapshotUUIDs, pinnedEntity));
+        }
+
+        String orphanEntity = "repoName__orphan";
+        assertTrue(SnapshotsService.isOrphanPinnedEntity(repoName, snapshotUUIDs, orphanEntity));
+    }
+
+    /**
+     * Helper method to create a SnapshotsService instance with a provided ClusterService.
+     * This method mocks all necessary dependencies for the SnapshotsService.
+     */
+    private SnapshotsService createSnapshotsService(ClusterService mockClusterService) {
+        ThreadPool mockThreadPool = mock(ThreadPool.class);
+        when(mockThreadPool.executor(ThreadPool.Names.SNAPSHOT)).thenReturn(OpenSearchExecutors.newDirectExecutorService());
+
+        RepositoriesService mockRepoService = mock(RepositoriesService.class);
+        TransportService mockTransportService = mock(TransportService.class);
+        when(mockTransportService.getThreadPool()).thenReturn(mockThreadPool);
+
+        DiscoveryNode localNode = new DiscoveryNode("local", buildNewFakeTransportAddress(), Version.CURRENT);
+        when(mockClusterService.localNode()).thenReturn(localNode);
+
+        ClusterSettings clusterSettings = new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS);
+        when(mockClusterService.getClusterSettings()).thenReturn(clusterSettings);
+
+        return new SnapshotsService(
+            Settings.EMPTY,
+            mockClusterService,
+            mock(IndexNameExpressionResolver.class),
+            mockRepoService,
+            mockTransportService,
+            mock(ActionFilters.class),
+            null,
+            mock(RemoteStoreSettings.class)
+        );
+    }
+
+    /**
+     * Helper method to create a SnapshotsService instance with a mocked ClusterService.
+     * This method is a convenience wrapper around createSnapshotsService(ClusterService).
+     */
+    private SnapshotsService createSnapshotsService() {
+        ClusterService mockClusterService = mock(ClusterService.class);
+        return createSnapshotsService(mockClusterService);
+    }
+
     private static DiscoveryNodes discoveryNodes(String localNodeId) {
         return DiscoveryNodes.builder().localNodeId(localNodeId).build();
     }
 
-    private static ImmutableOpenMap<ShardId, SnapshotsInProgress.ShardSnapshotStatus> shardsMap(
+    private static Map<ShardId, SnapshotsInProgress.ShardSnapshotStatus> shardsMap(
         ShardId shardId,
         SnapshotsInProgress.ShardSnapshotStatus shardStatus
     ) {
-        return ImmutableOpenMap.<ShardId, SnapshotsInProgress.ShardSnapshotStatus>builder().fPut(shardId, shardStatus).build();
+        return Map.of(shardId, shardStatus);
     }
 
-    private static ImmutableOpenMap<RepositoryShardId, SnapshotsInProgress.ShardSnapshotStatus> clonesMap(
+    private static Map<RepositoryShardId, SnapshotsInProgress.ShardSnapshotStatus> clonesMap(
         RepositoryShardId shardId,
         SnapshotsInProgress.ShardSnapshotStatus shardStatus
     ) {
-        return ImmutableOpenMap.<RepositoryShardId, SnapshotsInProgress.ShardSnapshotStatus>builder().fPut(shardId, shardStatus).build();
+        return Map.of(shardId, shardStatus);
     }
 
     private static SnapshotsService.ShardSnapshotUpdate successUpdate(Snapshot snapshot, ShardId shardId, String nodeId) {
@@ -472,7 +944,7 @@ public class SnapshotsServiceTests extends OpenSearchTestCase {
     private static SnapshotsInProgress.Entry snapshotEntry(
         Snapshot snapshot,
         List<IndexId> indexIds,
-        ImmutableOpenMap<ShardId, SnapshotsInProgress.ShardSnapshotStatus> shards
+        final Map<ShardId, SnapshotsInProgress.ShardSnapshotStatus> shards
     ) {
         return SnapshotsInProgress.startedEntry(
             snapshot,
@@ -484,17 +956,18 @@ public class SnapshotsServiceTests extends OpenSearchTestCase {
             randomNonNegativeLong(),
             shards,
             Collections.emptyMap(),
-            Version.CURRENT
+            Version.CURRENT,
+            false
         );
     }
 
     private static SnapshotsInProgress.Entry cloneEntry(
         Snapshot snapshot,
         SnapshotId source,
-        ImmutableOpenMap<RepositoryShardId, SnapshotsInProgress.ShardSnapshotStatus> clones
+        final Map<RepositoryShardId, SnapshotsInProgress.ShardSnapshotStatus> clones
     ) {
-        final List<IndexId> indexIds = StreamSupport.stream(clones.keys().spliterator(), false)
-            .map(k -> k.value.index())
+        final List<IndexId> indexIds = StreamSupport.stream(clones.keySet().spliterator(), false)
+            .map(k -> k.index())
             .distinct()
             .collect(Collectors.toList());
         return SnapshotsInProgress.startClone(snapshot, source, indexIds, 1L, randomNonNegativeLong(), Version.CURRENT).withClones(clones);

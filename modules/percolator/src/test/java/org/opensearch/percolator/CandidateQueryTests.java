@@ -81,6 +81,7 @@ import org.apache.lucene.search.Query;
 import org.apache.lucene.search.QueryVisitor;
 import org.apache.lucene.search.ScoreMode;
 import org.apache.lucene.search.Scorer;
+import org.apache.lucene.search.ScorerSupplier;
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.SortField;
 import org.apache.lucene.search.TermInSetQuery;
@@ -94,14 +95,13 @@ import org.apache.lucene.util.BytesRef;
 import org.opensearch.Version;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.common.CheckedFunction;
-import org.opensearch.common.Strings;
-import org.opensearch.common.bytes.BytesArray;
-import org.opensearch.common.bytes.BytesReference;
 import org.opensearch.common.compress.CompressedXContent;
-import org.opensearch.common.lucene.search.function.FunctionScoreQuery;
 import org.opensearch.common.geo.ShapeRelation;
+import org.opensearch.common.lucene.search.function.FunctionScoreQuery;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.xcontent.XContentFactory;
+import org.opensearch.core.common.bytes.BytesArray;
+import org.opensearch.core.common.bytes.BytesReference;
 import org.opensearch.index.IndexService;
 import org.opensearch.index.IndexSettings;
 import org.opensearch.index.mapper.DocumentMapper;
@@ -112,9 +112,9 @@ import org.opensearch.index.mapper.ParseContext;
 import org.opensearch.index.query.QueryShardContext;
 import org.opensearch.plugins.Plugin;
 import org.opensearch.test.OpenSearchSingleNodeTestCase;
+import org.opensearch.test.VersionUtils;
 import org.junit.After;
 import org.junit.Before;
-import org.opensearch.test.VersionUtils;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -163,51 +163,49 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
         indexService = createIndex(indexName, Settings.EMPTY);
         mapperService = indexService.mapperService();
 
-        String mapper = Strings.toString(
-            XContentFactory.jsonBuilder()
-                .startObject()
-                .startObject("type")
-                .startObject("properties")
-                .startObject("int_field")
-                .field("type", "integer")
-                .endObject()
-                .startObject("long_field")
-                .field("type", "long")
-                .endObject()
-                .startObject("half_float_field")
-                .field("type", "half_float")
-                .endObject()
-                .startObject("float_field")
-                .field("type", "float")
-                .endObject()
-                .startObject("double_field")
-                .field("type", "double")
-                .endObject()
-                .startObject("ip_field")
-                .field("type", "ip")
-                .endObject()
-                .startObject("field")
-                .field("type", "keyword")
-                .endObject()
-                .endObject()
-                .endObject()
-                .endObject()
-        );
+        String mapper = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("type")
+            .startObject("properties")
+            .startObject("int_field")
+            .field("type", "integer")
+            .endObject()
+            .startObject("long_field")
+            .field("type", "long")
+            .endObject()
+            .startObject("half_float_field")
+            .field("type", "half_float")
+            .endObject()
+            .startObject("float_field")
+            .field("type", "float")
+            .endObject()
+            .startObject("double_field")
+            .field("type", "double")
+            .endObject()
+            .startObject("ip_field")
+            .field("type", "ip")
+            .endObject()
+            .startObject("field")
+            .field("type", "keyword")
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .toString();
         documentMapper = mapperService.merge("type", new CompressedXContent(mapper), MapperService.MergeReason.MAPPING_UPDATE);
 
         String queryField = "query_field";
-        String percolatorMapper = Strings.toString(
-            XContentFactory.jsonBuilder()
-                .startObject()
-                .startObject("type")
-                .startObject("properties")
-                .startObject(queryField)
-                .field("type", "percolator")
-                .endObject()
-                .endObject()
-                .endObject()
-                .endObject()
-        );
+        String percolatorMapper = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("type")
+            .startObject("properties")
+            .startObject(queryField)
+            .field("type", "percolator")
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .toString();
         mapperService.merge("type", new CompressedXContent(percolatorMapper), MapperService.MergeReason.MAPPING_UPDATE);
         fieldMapper = (PercolatorFieldMapper) mapperService.documentMapper().mappers().getMapper(queryField);
         fieldType = (PercolatorFieldMapper.PercolatorFieldType) fieldMapper.fieldType();
@@ -270,15 +268,13 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
         queryFunctions.add(
             () -> new TermInSetQuery(
                 field1,
-                new BytesRef(randomFrom(stringContent.get(field1))),
-                new BytesRef(randomFrom(stringContent.get(field1)))
+                List.of(new BytesRef(randomFrom(stringContent.get(field1))), new BytesRef(randomFrom(stringContent.get(field1))))
             )
         );
         queryFunctions.add(
             () -> new TermInSetQuery(
                 field2,
-                new BytesRef(randomFrom(stringContent.get(field1))),
-                new BytesRef(randomFrom(stringContent.get(field1)))
+                List.of(new BytesRef(randomFrom(stringContent.get(field1))), new BytesRef(randomFrom(stringContent.get(field1))))
             )
         );
         // many iterations with boolean queries, which are the most complex queries to deal with when nested
@@ -685,7 +681,7 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
             v
         );
         TopDocs topDocs = shardSearcher.search(query, 1);
-        assertEquals(1L, topDocs.totalHits.value);
+        assertEquals(1L, topDocs.totalHits.value());
         assertEquals(1, topDocs.scoreDocs.length);
         assertEquals(0, topDocs.scoreDocs[0].doc);
 
@@ -693,7 +689,7 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
         percolateSearcher = memoryIndex.createSearcher();
         query = fieldType.percolateQuery("_name", queryStore, Collections.singletonList(new BytesArray("{}")), percolateSearcher, false, v);
         topDocs = shardSearcher.search(query, 1);
-        assertEquals(1L, topDocs.totalHits.value);
+        assertEquals(1L, topDocs.totalHits.value());
         assertEquals(1, topDocs.scoreDocs.length);
         assertEquals(1, topDocs.scoreDocs[0].doc);
 
@@ -701,7 +697,7 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
         percolateSearcher = memoryIndex.createSearcher();
         query = fieldType.percolateQuery("_name", queryStore, Collections.singletonList(new BytesArray("{}")), percolateSearcher, false, v);
         topDocs = shardSearcher.search(query, 1);
-        assertEquals(1L, topDocs.totalHits.value);
+        assertEquals(1L, topDocs.totalHits.value());
         assertEquals(1, topDocs.scoreDocs.length);
         assertEquals(2, topDocs.scoreDocs[0].doc);
 
@@ -709,7 +705,7 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
         percolateSearcher = memoryIndex.createSearcher();
         query = fieldType.percolateQuery("_name", queryStore, Collections.singletonList(new BytesArray("{}")), percolateSearcher, false, v);
         topDocs = shardSearcher.search(query, 1);
-        assertEquals(1, topDocs.totalHits.value);
+        assertEquals(1, topDocs.totalHits.value());
         assertEquals(1, topDocs.scoreDocs.length);
         assertEquals(3, topDocs.scoreDocs[0].doc);
 
@@ -717,7 +713,7 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
         percolateSearcher = memoryIndex.createSearcher();
         query = fieldType.percolateQuery("_name", queryStore, Collections.singletonList(new BytesArray("{}")), percolateSearcher, false, v);
         topDocs = shardSearcher.search(query, 1);
-        assertEquals(1, topDocs.totalHits.value);
+        assertEquals(1, topDocs.totalHits.value());
         assertEquals(1, topDocs.scoreDocs.length);
         assertEquals(4, topDocs.scoreDocs[0].doc);
 
@@ -728,7 +724,7 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
         percolateSearcher = memoryIndex.createSearcher();
         query = fieldType.percolateQuery("_name", queryStore, Collections.singletonList(new BytesArray("{}")), percolateSearcher, false, v);
         topDocs = shardSearcher.search(query, 1);
-        assertEquals(1, topDocs.totalHits.value);
+        assertEquals(1, topDocs.totalHits.value());
         assertEquals(1, topDocs.scoreDocs.length);
         assertEquals(5, topDocs.scoreDocs[0].doc);
     }
@@ -874,14 +870,14 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
             Version.CURRENT
         );
         TopDocs topDocs = shardSearcher.search(query, 10, new Sort(SortField.FIELD_DOC));
-        assertEquals(3L, topDocs.totalHits.value);
+        assertEquals(3L, topDocs.totalHits.value());
         assertEquals(3, topDocs.scoreDocs.length);
         assertEquals(0, topDocs.scoreDocs[0].doc);
         assertEquals(1, topDocs.scoreDocs[1].doc);
         assertEquals(4, topDocs.scoreDocs[2].doc);
 
         topDocs = shardSearcher.search(new ConstantScoreQuery(query), 10);
-        assertEquals(3L, topDocs.totalHits.value);
+        assertEquals(3L, topDocs.totalHits.value());
         assertEquals(3, topDocs.scoreDocs.length);
         assertEquals(0, topDocs.scoreDocs[0].doc);
         assertEquals(1, topDocs.scoreDocs[1].doc);
@@ -913,7 +909,7 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
             Version.CURRENT
         );
         TopDocs topDocs = shardSearcher.search(query, 10, new Sort(SortField.FIELD_DOC));
-        assertEquals(2L, topDocs.totalHits.value);
+        assertEquals(2L, topDocs.totalHits.value());
         assertEquals(2, topDocs.scoreDocs.length);
         assertEquals(0, topDocs.scoreDocs[0].doc);
         assertEquals(2, topDocs.scoreDocs[1].doc);
@@ -969,15 +965,15 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
                     v
                 );
                 BooleanQuery candidateQuery = (BooleanQuery) query.getCandidateMatchesQuery();
-                assertThat(candidateQuery.clauses().get(0).getQuery(), instanceOf(CoveringQuery.class));
+                assertThat(candidateQuery.clauses().get(0).query(), instanceOf(CoveringQuery.class));
                 TopDocs topDocs = shardSearcher.search(query, 10);
-                assertEquals(2L, topDocs.totalHits.value);
+                assertEquals(2L, topDocs.totalHits.value());
                 assertEquals(2, topDocs.scoreDocs.length);
                 assertEquals(0, topDocs.scoreDocs[0].doc);
                 assertEquals(2, topDocs.scoreDocs[1].doc);
 
                 topDocs = shardSearcher.search(new ConstantScoreQuery(query), 10);
-                assertEquals(2L, topDocs.totalHits.value);
+                assertEquals(2L, topDocs.totalHits.value());
                 assertEquals(2, topDocs.scoreDocs.length);
                 assertEquals(0, topDocs.scoreDocs[0].doc);
                 assertEquals(2, topDocs.scoreDocs[1].doc);
@@ -1005,16 +1001,16 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
                     v
                 );
                 BooleanQuery candidateQuery = (BooleanQuery) query.getCandidateMatchesQuery();
-                assertThat(candidateQuery.clauses().get(0).getQuery(), instanceOf(TermInSetQuery.class));
+                assertThat(candidateQuery.clauses().get(0).query(), instanceOf(TermInSetQuery.class));
 
                 TopDocs topDocs = shardSearcher.search(query, 10);
-                assertEquals(2L, topDocs.totalHits.value);
+                assertEquals(2L, topDocs.totalHits.value());
                 assertEquals(2, topDocs.scoreDocs.length);
                 assertEquals(1, topDocs.scoreDocs[0].doc);
                 assertEquals(2, topDocs.scoreDocs[1].doc);
 
                 topDocs = shardSearcher.search(new ConstantScoreQuery(query), 10);
-                assertEquals(2L, topDocs.totalHits.value);
+                assertEquals(2L, topDocs.totalHits.value());
                 assertEquals(2, topDocs.scoreDocs.length);
                 assertEquals(1, topDocs.scoreDocs[0].doc);
                 assertEquals(2, topDocs.scoreDocs[1].doc);
@@ -1065,7 +1061,7 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
         IndexSearcher percolateSearcher = memoryIndex.createSearcher();
         PercolateQuery query = (PercolateQuery) fieldType.percolateQuery("_name", queryStore, sources, percolateSearcher, false, v);
         TopDocs topDocs = shardSearcher.search(query, 10, new Sort(SortField.FIELD_DOC));
-        assertEquals(2L, topDocs.totalHits.value);
+        assertEquals(2L, topDocs.totalHits.value());
         assertEquals(0, topDocs.scoreDocs[0].doc);
         assertEquals(1, topDocs.scoreDocs[1].doc);
     }
@@ -1099,7 +1095,7 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
         IndexSearcher percolateSearcher = memoryIndex.createSearcher();
         PercolateQuery query = (PercolateQuery) fieldType.percolateQuery("_name", queryStore, sources, percolateSearcher, false, v);
         TopDocs topDocs = shardSearcher.search(query, 10, new Sort(SortField.FIELD_DOC));
-        assertEquals(1L, topDocs.totalHits.value);
+        assertEquals(1L, topDocs.totalHits.value());
         assertEquals(0, topDocs.scoreDocs[0].doc);
 
         memoryIndex = new MemoryIndex();
@@ -1107,7 +1103,7 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
         percolateSearcher = memoryIndex.createSearcher();
         query = (PercolateQuery) fieldType.percolateQuery("_name", queryStore, sources, percolateSearcher, false, v);
         topDocs = shardSearcher.search(query, 10, new Sort(SortField.FIELD_DOC));
-        assertEquals(1L, topDocs.totalHits.value);
+        assertEquals(1L, topDocs.totalHits.value());
         assertEquals(0, topDocs.scoreDocs[0].doc);
 
         memoryIndex = new MemoryIndex();
@@ -1115,7 +1111,7 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
         percolateSearcher = memoryIndex.createSearcher();
         query = (PercolateQuery) fieldType.percolateQuery("_name", queryStore, sources, percolateSearcher, false, v);
         topDocs = shardSearcher.search(query, 10, new Sort(SortField.FIELD_DOC));
-        assertEquals(1L, topDocs.totalHits.value);
+        assertEquals(1L, topDocs.totalHits.value());
         assertEquals(0, topDocs.scoreDocs[0].doc);
     }
 
@@ -1150,7 +1146,7 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
         IndexSearcher percolateSearcher = memoryIndex.createSearcher();
         PercolateQuery query = (PercolateQuery) fieldType.percolateQuery("_name", queryStore, sources, percolateSearcher, false, v);
         TopDocs topDocs = shardSearcher.search(query, 10, new Sort(SortField.FIELD_DOC));
-        assertEquals(1L, topDocs.totalHits.value);
+        assertEquals(1L, topDocs.totalHits.value());
         assertEquals(0, topDocs.scoreDocs[0].doc);
     }
 
@@ -1173,7 +1169,7 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
         TopDocs controlTopDocs = shardSearcher.search(controlQuery, 100);
 
         try {
-            assertThat(topDocs.totalHits.value, equalTo(controlTopDocs.totalHits.value));
+            assertThat(topDocs.totalHits.value(), equalTo(controlTopDocs.totalHits.value()));
             assertThat(topDocs.scoreDocs.length, equalTo(controlTopDocs.scoreDocs.length));
             for (int j = 0; j < topDocs.scoreDocs.length; j++) {
                 assertThat(topDocs.scoreDocs[j].doc, equalTo(controlTopDocs.scoreDocs[j].doc));
@@ -1201,7 +1197,7 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
                 logger.error("controlTopDocs.scoreDocs[{}].score={}", i, controlTopDocs.scoreDocs[i].score);
 
                 // Additional stored information that is useful when debugging:
-                String queryToString = shardSearcher.doc(controlTopDocs.scoreDocs[i].doc).get("query_to_string");
+                String queryToString = shardSearcher.storedFields().document(controlTopDocs.scoreDocs[i].doc).get("query_to_string");
                 logger.error("controlTopDocs.scoreDocs[{}].query_to_string={}", i, queryToString);
 
                 TermsEnum tenum = MultiTerms.getTerms(shardSearcher.getIndexReader(), fieldType.queryTermsField.name()).iterator();
@@ -1275,7 +1271,7 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
         }
 
         @Override
-        public Query rewrite(IndexReader reader) throws IOException {
+        public Query rewrite(IndexSearcher searcher) throws IOException {
             return new TermQuery(term);
         }
 
@@ -1333,7 +1329,7 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
                 }
 
                 @Override
-                public Scorer scorer(LeafReaderContext context) throws IOException {
+                public ScorerSupplier scorerSupplier(LeafReaderContext context) throws IOException {
                     float _score[] = new float[] { boost };
                     DocIdSetIterator allDocs = DocIdSetIterator.all(context.reader().maxDoc());
                     CheckedFunction<Integer, Query, IOException> leaf = queryStore.getQueries(context);
@@ -1357,7 +1353,7 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
                             }
                         }
                     };
-                    return new Scorer(this) {
+                    return new DefaultScorerSupplier(new Scorer() {
 
                         @Override
                         public int docID() {
@@ -1378,7 +1374,7 @@ public class CandidateQueryTests extends OpenSearchSingleNodeTestCase {
                         public float getMaxScore(int upTo) throws IOException {
                             return _score[0];
                         }
-                    };
+                    });
                 }
 
                 @Override

@@ -33,6 +33,7 @@
 package org.opensearch.common.util.concurrent;
 
 import org.opensearch.common.SuppressForbidden;
+import org.opensearch.core.concurrency.OpenSearchRejectedExecutionException;
 
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ThreadFactory;
@@ -203,5 +204,16 @@ public class OpenSearchThreadPoolExecutor extends ThreadPoolExecutor {
 
     protected Runnable unwrap(Runnable runnable) {
         return contextHolder.unwrap(runnable);
+    }
+
+    /**
+     * Returns the cumulative wait time of the ThreadPool. If the ThreadPool does not support tracking the cumulative pool wait time
+     * then this should return -1 which will prevent the value from showing up in {@link org.opensearch.threadpool.ThreadPoolStats}.
+     * ThreadPools that do support this metric should override this method. For example, {@link QueueResizingOpenSearchThreadPoolExecutor}
+     * does so using the {@link TimedRunnable} to get the difference between Runnable creation and execution.
+     *
+     */
+    public long getPoolWaitTimeNanos() {
+        return -1;
     }
 }

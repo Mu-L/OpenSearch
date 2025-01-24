@@ -33,12 +33,13 @@ package org.opensearch.cluster.coordination;
 
 import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.opensearch.Version;
-import org.opensearch.action.ActionListener;
+import org.opensearch.cluster.ClusterManagerMetrics;
 import org.opensearch.cluster.ClusterName;
 import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.OpenSearchAllocationTestCase;
 import org.opensearch.cluster.block.ClusterBlocks;
 import org.opensearch.cluster.coordination.CoordinationMetadata.VotingConfiguration;
+import org.opensearch.cluster.coordination.PersistedStateRegistry.PersistedStateType;
 import org.opensearch.cluster.decommission.DecommissionAttribute;
 import org.opensearch.cluster.decommission.DecommissionAttributeMetadata;
 import org.opensearch.cluster.decommission.DecommissionStatus;
@@ -47,17 +48,22 @@ import org.opensearch.cluster.metadata.Metadata;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.node.DiscoveryNodeRole;
 import org.opensearch.cluster.node.DiscoveryNodes;
-import org.opensearch.cluster.service.FakeThreadPoolClusterManagerService;
 import org.opensearch.cluster.service.ClusterManagerService;
+import org.opensearch.cluster.service.FakeThreadPoolClusterManagerService;
 import org.opensearch.cluster.service.MasterServiceTests;
 import org.opensearch.common.Randomness;
 import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.util.concurrent.BaseFuture;
 import org.opensearch.common.util.concurrent.FutureUtils;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.transport.TransportResponse;
 import org.opensearch.monitor.NodeHealthService;
 import org.opensearch.monitor.StatusInfo;
 import org.opensearch.node.Node;
+import org.opensearch.node.remotestore.RemoteStoreNodeService;
+import org.opensearch.telemetry.metrics.noop.NoopMetricsRegistry;
+import org.opensearch.telemetry.tracing.noop.NoopTracer;
 import org.opensearch.test.ClusterServiceUtils;
 import org.opensearch.test.OpenSearchTestCase;
 import org.opensearch.test.transport.CapturingTransport;
@@ -67,7 +73,7 @@ import org.opensearch.transport.RequestHandlerRegistry;
 import org.opensearch.transport.TestTransportChannel;
 import org.opensearch.transport.Transport;
 import org.opensearch.transport.TransportRequest;
-import org.opensearch.transport.TransportResponse;
+import org.opensearch.transport.TransportRequestOptions;
 import org.opensearch.transport.TransportService;
 import org.junit.After;
 import org.junit.AfterClass;
@@ -87,6 +93,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
+
+import org.mockito.Mockito;
 
 import static java.util.Collections.emptyList;
 import static java.util.Collections.emptyMap;
@@ -173,7 +181,8 @@ public class NodeJoinTests extends OpenSearchTestCase {
         ClusterManagerService clusterManagerService = new ClusterManagerService(
             Settings.builder().put(Node.NODE_NAME_SETTING.getKey(), "test_node").build(),
             new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS),
-            threadPool
+            threadPool,
+            new ClusterManagerMetrics(NoopMetricsRegistry.INSTANCE)
         );
         AtomicReference<ClusterState> clusterStateRef = new AtomicReference<>(initialState);
         clusterManagerService.setClusterStatePublisher((event, publishListener, ackListener) -> {
@@ -207,16 +216,32 @@ public class NodeJoinTests extends OpenSearchTestCase {
         CapturingTransport capturingTransport = new CapturingTransport() {
             @Override
             protected void onSendRequest(long requestId, String action, TransportRequest request, DiscoveryNode destination) {
-                if (action.equals(HANDSHAKE_ACTION_NAME)) {
-                    handleResponse(
-                        requestId,
-                        new TransportService.HandshakeResponse(destination, initialState.getClusterName(), destination.getVersion())
-                    );
-                } else if (action.equals(JoinHelper.VALIDATE_JOIN_ACTION_NAME)) {
-                    handleResponse(requestId, new TransportResponse.Empty());
-                } else {
-                    super.onSendRequest(requestId, action, request, destination);
+                switch (action) {
+                    case HANDSHAKE_ACTION_NAME:
+                        handleResponse(
+                            requestId,
+                            new TransportService.HandshakeResponse(destination, initialState.getClusterName(), destination.getVersion())
+                        );
+                        break;
+                    case JoinHelper.VALIDATE_JOIN_ACTION_NAME:
+                    case JoinHelper.VALIDATE_COMPRESSED_JOIN_ACTION_NAME:
+                        handleResponse(requestId, new TransportResponse.Empty());
+                        break;
+                    default:
+                        super.onSendRequest(requestId, action, request, destination);
+                        break;
                 }
+            }
+
+            @Override
+            protected void onSendRequest(
+                long requestId,
+                String action,
+                TransportRequest request,
+                DiscoveryNode destination,
+                TransportRequestOptions options
+            ) {
+                onSendRequest(requestId, action, request, destination);
             }
         };
         final ClusterSettings clusterSettings = new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS);
@@ -226,8 +251,11 @@ public class NodeJoinTests extends OpenSearchTestCase {
             TransportService.NOOP_TRANSPORT_INTERCEPTOR,
             x -> initialState.nodes().getLocalNode(),
             clusterSettings,
-            Collections.emptySet()
+            Collections.emptySet(),
+            NoopTracer.INSTANCE
         );
+        final PersistedStateRegistry persistedStateRegistry = persistedStateRegistry();
+        persistedStateRegistry.addPersistedState(PersistedStateType.LOCAL, new InMemoryPersistedState(term, initialState));
         coordinator = new Coordinator(
             "test_node",
             Settings.EMPTY,
@@ -236,14 +264,18 @@ public class NodeJoinTests extends OpenSearchTestCase {
             writableRegistry(),
             OpenSearchAllocationTestCase.createAllocationService(Settings.EMPTY),
             clusterManagerService,
-            () -> new InMemoryPersistedState(term, initialState),
+            () -> persistedStateRegistry.getPersistedState(PersistedStateType.LOCAL),
             r -> emptyList(),
             new NoOpClusterApplier(),
             Collections.emptyList(),
             random,
             (s, p, r) -> {},
             ElectionStrategy.DEFAULT_INSTANCE,
-            nodeHealthService
+            nodeHealthService,
+            persistedStateRegistry,
+            Mockito.mock(RemoteStoreNodeService.class),
+            new ClusterManagerMetrics(NoopMetricsRegistry.INSTANCE),
+            null
         );
         transportService.start();
         transportService.acceptIncomingRequests();
@@ -517,14 +549,9 @@ public class NodeJoinTests extends OpenSearchTestCase {
             )
         );
 
-        assertTrue(
-            MasterServiceTests.discoveryState(clusterManagerService)
-                .getVotingConfigExclusions()
-                .stream()
-                .anyMatch(
-                    exclusion -> { return "knownNodeName".equals(exclusion.getNodeName()) && "newNodeId".equals(exclusion.getNodeId()); }
-                )
-        );
+        assertTrue(MasterServiceTests.discoveryState(clusterManagerService).getVotingConfigExclusions().stream().anyMatch(exclusion -> {
+            return "knownNodeName".equals(exclusion.getNodeName()) && "newNodeId".equals(exclusion.getNodeId());
+        }));
     }
 
     private ClusterState buildStateWithVotingConfigExclusion(
@@ -847,7 +874,8 @@ public class NodeJoinTests extends OpenSearchTestCase {
     ) {
         DecommissionAttributeMetadata decommissionAttributeMetadata = new DecommissionAttributeMetadata(
             decommissionAttribute,
-            DecommissionStatus.SUCCESSFUL
+            DecommissionStatus.SUCCESSFUL,
+            randomAlphaOfLength(10)
         );
         return ClusterState.builder(clusterState)
             .metadata(Metadata.builder(clusterState.metadata()).decommissionAttributeMetadata(decommissionAttributeMetadata))

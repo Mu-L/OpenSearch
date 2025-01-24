@@ -17,17 +17,21 @@ import org.apache.lucene.document.SortedDocValuesField;
 import org.apache.lucene.document.SortedNumericDocValuesField;
 import org.apache.lucene.document.SortedSetDocValuesField;
 import org.apache.lucene.document.StringField;
-import org.apache.lucene.tests.index.RandomIndexWriter;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.TermQuery;
+import org.apache.lucene.tests.index.RandomIndexWriter;
 import org.apache.lucene.util.BytesRef;
-import org.hamcrest.MatcherAssert;
 import org.opensearch.common.CheckedConsumer;
 import org.opensearch.common.network.InetAddresses;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.time.DateFormatter;
+import org.opensearch.common.util.BigArrays;
+import org.opensearch.common.util.MockPageCacheRecycler;
+import org.opensearch.core.indices.breaker.NoneCircuitBreakerService;
+import org.opensearch.index.IndexService;
+import org.opensearch.index.cache.IndexCache;
 import org.opensearch.index.mapper.BooleanFieldMapper;
 import org.opensearch.index.mapper.DateFieldMapper;
 import org.opensearch.index.mapper.GeoPointFieldMapper;
@@ -35,22 +39,32 @@ import org.opensearch.index.mapper.IpFieldMapper;
 import org.opensearch.index.mapper.KeywordFieldMapper;
 import org.opensearch.index.mapper.MappedFieldType;
 import org.opensearch.index.mapper.NumberFieldMapper;
+import org.opensearch.index.query.QueryShardContext;
+import org.opensearch.index.shard.IndexShard;
 import org.opensearch.script.MockScriptEngine;
 import org.opensearch.script.Script;
 import org.opensearch.script.ScriptEngine;
 import org.opensearch.script.ScriptModule;
 import org.opensearch.script.ScriptService;
 import org.opensearch.script.ScriptType;
+import org.opensearch.search.DocValueFormat;
 import org.opensearch.search.aggregations.AggregationBuilder;
+import org.opensearch.search.aggregations.Aggregator;
+import org.opensearch.search.aggregations.AggregatorFactories;
 import org.opensearch.search.aggregations.AggregatorTestCase;
 import org.opensearch.search.aggregations.BucketOrder;
+import org.opensearch.search.aggregations.CardinalityUpperBound;
+import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.metrics.InternalMax;
 import org.opensearch.search.aggregations.metrics.MaxAggregationBuilder;
 import org.opensearch.search.aggregations.support.CoreValuesSourceType;
 import org.opensearch.search.aggregations.support.MultiTermsValuesSourceConfig;
 import org.opensearch.search.aggregations.support.ValueType;
 import org.opensearch.search.aggregations.support.ValuesSourceType;
+import org.opensearch.search.internal.SearchContext;
 import org.opensearch.search.lookup.LeafDocLookup;
+import org.opensearch.test.TestSearchContext;
+import org.hamcrest.MatcherAssert;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -58,6 +72,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -68,8 +83,12 @@ import static java.util.Collections.singletonMap;
 import static java.util.stream.Collectors.toList;
 import static org.hamcrest.Matchers.closeTo;
 import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.instanceOf;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 public class MultiTermsAggregatorTests extends AggregatorTestCase {
     private static final String FIELD_NAME = "field";
@@ -107,6 +126,19 @@ public class MultiTermsAggregatorTests extends AggregatorTestCase {
 
     private static final Consumer<MultiTermsAggregationBuilder> NONE_DECORATOR = null;
 
+    private static final Consumer<InternalMultiTerms> IP_AND_KEYWORD_DESC_ORDER_VERIFY = h -> {
+        MatcherAssert.assertThat(h.getBuckets(), hasSize(3));
+        MatcherAssert.assertThat(h.getBuckets().get(0).getKey(), contains(equalTo("a"), equalTo("192.168.0.0")));
+        MatcherAssert.assertThat(h.getBuckets().get(0).getKeyAsString(), equalTo("a|192.168.0.0"));
+        MatcherAssert.assertThat(h.getBuckets().get(0).getDocCount(), equalTo(2L));
+        MatcherAssert.assertThat(h.getBuckets().get(1).getKey(), contains(equalTo("b"), equalTo("192.168.0.1")));
+        MatcherAssert.assertThat(h.getBuckets().get(1).getKeyAsString(), equalTo("b|192.168.0.1"));
+        MatcherAssert.assertThat(h.getBuckets().get(1).getDocCount(), equalTo(1L));
+        MatcherAssert.assertThat(h.getBuckets().get(2).getKey(), contains(equalTo("c"), equalTo("192.168.0.2")));
+        MatcherAssert.assertThat(h.getBuckets().get(2).getKeyAsString(), equalTo("c|192.168.0.2"));
+        MatcherAssert.assertThat(h.getBuckets().get(2).getDocCount(), equalTo(1L));
+    };
+
     @Override
     protected List<ValuesSourceType> getSupportedValuesSourceTypes() {
         return Collections.unmodifiableList(
@@ -127,7 +159,7 @@ public class MultiTermsAggregatorTests extends AggregatorTestCase {
 
     @Override
     protected ScriptService getMockScriptService() {
-        final Map<String, Function<Map<String, Object>, Object>> scripts = org.opensearch.common.collect.Map.of(
+        final Map<String, Function<Map<String, Object>, Object>> scripts = Map.of(
             VALUE_SCRIPT_NAME,
             vars -> ((Number) vars.get("_value")).doubleValue() + 1,
             FIELD_SCRIPT_NAME,
@@ -653,8 +685,48 @@ public class MultiTermsAggregatorTests extends AggregatorTestCase {
         );
     }
 
-    public void testIpAndKeyword() throws IOException {
-        testAggregation(new MatchAllDocsQuery(), fieldConfigs(asList(KEYWORD_FIELD, IP_FIELD)), NONE_DECORATOR, iw -> {
+    public void testIpAndKeywordDefaultDescOrder() throws IOException {
+        ipAndKeywordTest(NONE_DECORATOR, IP_AND_KEYWORD_DESC_ORDER_VERIFY);
+    }
+
+    public void testIpAndKeywordWithBucketCountSameAsSize() throws IOException {
+        ipAndKeywordTest(multiTermsAggregationBuilder -> {
+            multiTermsAggregationBuilder.minDocCount(0);
+            multiTermsAggregationBuilder.size(3);
+            multiTermsAggregationBuilder.order(BucketOrder.compound(BucketOrder.count(false)));
+        }, IP_AND_KEYWORD_DESC_ORDER_VERIFY);
+    }
+
+    public void testIpAndKeywordWithBucketCountGreaterThanSize() throws IOException {
+        ipAndKeywordTest(multiTermsAggregationBuilder -> {
+            multiTermsAggregationBuilder.minDocCount(0);
+            multiTermsAggregationBuilder.size(10);
+            multiTermsAggregationBuilder.order(BucketOrder.compound(BucketOrder.count(false)));
+        }, IP_AND_KEYWORD_DESC_ORDER_VERIFY);
+    }
+
+    public void testIpAndKeywordAscOrder() throws IOException {
+        ipAndKeywordTest(multiTermsAggregationBuilder -> {
+            multiTermsAggregationBuilder.minDocCount(0);
+            multiTermsAggregationBuilder.size(3);
+            multiTermsAggregationBuilder.order(BucketOrder.compound(BucketOrder.count(true)));
+        }, h -> {
+            MatcherAssert.assertThat(h.getBuckets(), hasSize(3));
+            MatcherAssert.assertThat(h.getBuckets().get(0).getKey(), contains(equalTo("b"), equalTo("192.168.0.1")));
+            MatcherAssert.assertThat(h.getBuckets().get(0).getKeyAsString(), equalTo("b|192.168.0.1"));
+            MatcherAssert.assertThat(h.getBuckets().get(0).getDocCount(), equalTo(1L));
+            MatcherAssert.assertThat(h.getBuckets().get(1).getKey(), contains(equalTo("c"), equalTo("192.168.0.2")));
+            MatcherAssert.assertThat(h.getBuckets().get(1).getKeyAsString(), equalTo("c|192.168.0.2"));
+            MatcherAssert.assertThat(h.getBuckets().get(1).getDocCount(), equalTo(1L));
+            MatcherAssert.assertThat(h.getBuckets().get(2).getKey(), contains(equalTo("a"), equalTo("192.168.0.0")));
+            MatcherAssert.assertThat(h.getBuckets().get(2).getKeyAsString(), equalTo("a|192.168.0.0"));
+            MatcherAssert.assertThat(h.getBuckets().get(2).getDocCount(), equalTo(2L));
+        });
+    }
+
+    private void ipAndKeywordTest(Consumer<MultiTermsAggregationBuilder> builderDecorator, Consumer<InternalMultiTerms> verify)
+        throws IOException {
+        testAggregation(new MatchAllDocsQuery(), fieldConfigs(asList(KEYWORD_FIELD, IP_FIELD)), builderDecorator, iw -> {
             iw.addDocument(
                 asList(
                     new SortedDocValuesField(KEYWORD_FIELD, new BytesRef("a")),
@@ -679,18 +751,7 @@ public class MultiTermsAggregatorTests extends AggregatorTestCase {
                     new SortedDocValuesField(IP_FIELD, new BytesRef(InetAddressPoint.encode(InetAddresses.forString("192.168.0.0"))))
                 )
             );
-        }, h -> {
-            MatcherAssert.assertThat(h.getBuckets(), hasSize(3));
-            MatcherAssert.assertThat(h.getBuckets().get(0).getKey(), contains(equalTo("a"), equalTo("192.168.0.0")));
-            MatcherAssert.assertThat(h.getBuckets().get(0).getKeyAsString(), equalTo("a|192.168.0.0"));
-            MatcherAssert.assertThat(h.getBuckets().get(0).getDocCount(), equalTo(2L));
-            MatcherAssert.assertThat(h.getBuckets().get(1).getKey(), contains(equalTo("b"), equalTo("192.168.0.1")));
-            MatcherAssert.assertThat(h.getBuckets().get(1).getKeyAsString(), equalTo("b|192.168.0.1"));
-            MatcherAssert.assertThat(h.getBuckets().get(1).getDocCount(), equalTo(1L));
-            MatcherAssert.assertThat(h.getBuckets().get(2).getKey(), contains(equalTo("c"), equalTo("192.168.0.2")));
-            MatcherAssert.assertThat(h.getBuckets().get(2).getKeyAsString(), equalTo("c|192.168.0.2"));
-            MatcherAssert.assertThat(h.getBuckets().get(2).getDocCount(), equalTo(1L));
-        });
+        }, verify);
     }
 
     public void testEmpty() throws IOException {
@@ -850,6 +911,56 @@ public class MultiTermsAggregatorTests extends AggregatorTestCase {
                 MatcherAssert.assertThat(h.getBuckets().get(0).getDocCount(), equalTo(2L));
             }
         );
+    }
+
+    public void testEmptyAggregations() throws IOException {
+        QueryShardContext queryShardContext = mock(QueryShardContext.class);
+        IndexShard indexShard = mock(IndexShard.class);
+        BigArrays bigArrays = new BigArrays(new MockPageCacheRecycler(Settings.EMPTY), new NoneCircuitBreakerService(), "");
+        IndexService indexService = mock(IndexService.class);
+        when(indexService.getShardOrNull(0)).thenReturn(indexShard);
+        IndexCache cache = mock(IndexCache.class);
+        when(cache.bitsetFilterCache()).thenReturn(null);
+        when(indexService.cache()).thenReturn(cache);
+        SearchContext context = new TestSearchContext(bigArrays, indexService);
+        when(indexService.newQueryShardContext(0, null, () -> 0L, null)).thenReturn(queryShardContext);
+        AggregatorFactories factories = AggregatorFactories.EMPTY;
+        boolean showTermDocCountError = true;
+        MultiTermsAggregator.InternalValuesSource internalValuesSources = mock(MultiTermsAggregator.InternalValuesSource.class);
+        DocValueFormat format = mock(DocValueFormat.class);
+        BucketOrder order = mock(BucketOrder.class);
+        Aggregator.SubAggCollectionMode collectMode = Aggregator.SubAggCollectionMode.BREADTH_FIRST;
+        TermsAggregator.BucketCountThresholds bucketCountThresholds = mock(TermsAggregator.BucketCountThresholds.class);
+        Aggregator parent = mock(Aggregator.class);
+        CardinalityUpperBound cardinality = CardinalityUpperBound.ONE;
+        Map<String, Object> metadata = new HashMap<>();
+        String k1 = UUID.randomUUID().toString();
+        String v1 = UUID.randomUUID().toString();
+        metadata.put(k1, v1);
+
+        MultiTermsAggregator mAgg = new MultiTermsAggregator(
+            AGG_NAME,
+            factories,
+            showTermDocCountError,
+            List.of(internalValuesSources),
+            List.of(format),
+            order,
+            collectMode,
+            bucketCountThresholds,
+            context,
+            parent,
+            cardinality,
+            metadata
+        );
+        InternalAggregation emptyAgg = mAgg.buildEmptyAggregation();
+
+        MatcherAssert.assertThat(emptyAgg.getName(), equalTo(AGG_NAME));
+        MatcherAssert.assertThat(emptyAgg, instanceOf(InternalMultiTerms.class));
+
+        InternalMultiTerms mt = (InternalMultiTerms) emptyAgg;
+        MatcherAssert.assertThat(mt.getMetadata().keySet(), contains(k1));
+        MatcherAssert.assertThat(mt.getMetadata().get(k1), equalTo(v1));
+        MatcherAssert.assertThat(mt.getBuckets(), empty());
     }
 
     private void testAggregation(

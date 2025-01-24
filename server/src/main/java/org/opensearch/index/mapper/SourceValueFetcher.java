@@ -46,7 +46,7 @@ import java.util.Set;
  * An implementation of {@link ValueFetcher} that knows how to extract values
  * from the document source. Most standard field mappers will use this class
  * to implement value fetching.
- *
+ * <p>
  * Field types that handle arrays directly should instead use {@link ArraySourceValueFetcher}.
  *
  * @opensearch.internal
@@ -75,7 +75,7 @@ public abstract class SourceValueFetcher implements ValueFetcher {
         for (String path : sourcePaths) {
             Object sourceValue = lookup.extractValue(path, nullValue);
             if (sourceValue == null) {
-                return org.opensearch.common.collect.List.of();
+                return List.of();
             }
 
             // We allow source values to contain multiple levels of arrays, such as `"field": [[1, 2]]`.

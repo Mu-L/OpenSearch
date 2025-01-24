@@ -33,15 +33,16 @@ package org.opensearch.index.shard;
 
 import org.opensearch.cluster.routing.AllocationId;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.env.Environment;
+import org.opensearch.core.index.Index;
+import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.env.NodeEnvironment;
 import org.opensearch.gateway.WriteStateException;
-import org.opensearch.index.Index;
 import org.opensearch.test.OpenSearchTestCase;
 
 import java.io.IOException;
 import java.nio.file.Path;
 
+import static org.opensearch.env.Environment.PATH_SHARED_DATA_SETTING;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.is;
 
@@ -109,9 +110,7 @@ public class ShardPathTests extends OpenSearchTestCase {
         if (useCustomDataPath) {
             final Path path = createTempDir();
             customDataPath = "custom";
-            nodeSettings = Settings.builder()
-                .put(Environment.PATH_SHARED_DATA_SETTING.getKey(), path.toAbsolutePath().toAbsolutePath())
-                .build();
+            nodeSettings = Settings.builder().put(PATH_SHARED_DATA_SETTING.getKey(), path.toAbsolutePath().toAbsolutePath()).build();
             customPath = path.resolve("custom").resolve("0");
         } else {
             customPath = null;
@@ -146,6 +145,23 @@ public class ShardPathTests extends OpenSearchTestCase {
                 }
                 assertTrue("root state paths must be a node path but wasn't: " + shardPath.getRootDataPath(), found);
             }
+        }
+    }
+
+    public void testLoadFileCachePath() throws IOException {
+        Settings searchNodeSettings = Settings.builder().put("node.roles", "search").build();
+
+        try (NodeEnvironment env = newNodeEnvironment(searchNodeSettings)) {
+            ShardId shardId = new ShardId("foo", "0xDEADBEEF", 0);
+            Path fileCachePath = env.fileCacheNodePath().fileCachePath;
+            writeShardStateMetadata("0xDEADBEEF", fileCachePath);
+            ShardPath shardPath = ShardPath.loadFileCachePath(env, shardId);
+
+            assertTrue(shardPath.getDataPath().startsWith(fileCachePath));
+            assertFalse(shardPath.getShardStatePath().startsWith(fileCachePath));
+
+            assertEquals("0xDEADBEEF", shardPath.getShardId().getIndex().getUUID());
+            assertEquals("foo", shardPath.getShardId().getIndexName());
         }
     }
 

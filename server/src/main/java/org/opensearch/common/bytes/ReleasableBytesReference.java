@@ -35,9 +35,10 @@ package org.opensearch.common.bytes;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.BytesRefIterator;
 import org.opensearch.common.concurrent.RefCountedReleasable;
-import org.opensearch.common.io.stream.StreamInput;
 import org.opensearch.common.lease.Releasable;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.xcontent.XContentBuilder;
 
 import java.io.IOException;
 import java.io.OutputStream;

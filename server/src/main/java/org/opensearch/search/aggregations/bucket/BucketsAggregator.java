@@ -132,7 +132,7 @@ public abstract class BucketsAggregator extends AggregatorBase {
     /**
      * This only tidies up doc counts. Call {@link MergingBucketsDeferringCollector#mergeBuckets(long[])}  to merge the actual
      * ordinals and doc ID deltas.
-     *
+     * <p>
      * Refer to that method for documentation about the merge map.
      *
      * @deprecated use {@link mergeBuckets(long, LongUnaryOperator)}
@@ -146,7 +146,7 @@ public abstract class BucketsAggregator extends AggregatorBase {
      *
      *  @param mergeMap a unary operator which maps a bucket's ordinal to the ordinal it should be merged with.
      *  If a bucket's ordinal is mapped to -1 then the bucket is removed entirely.
-     *
+     * <p>
      * This only tidies up doc counts. Call {@link MergingBucketsDeferringCollector#mergeBuckets(LongUnaryOperator)} to
      * merge the actual ordinals and doc ID deltas.
      */
@@ -221,10 +221,6 @@ public abstract class BucketsAggregator extends AggregatorBase {
         }
         InternalAggregations[] result = new InternalAggregations[bucketOrdsToCollect.length];
         for (int ord = 0; ord < bucketOrdsToCollect.length; ord++) {
-            InternalAggregation[] slice = new InternalAggregation[subAggregators.length];
-            for (int i = 0; i < subAggregators.length; i++) {
-                slice[i] = aggregations[i][ord];
-            }
             final int thisOrd = ord;
             result[ord] = InternalAggregations.from(new AbstractList<InternalAggregation>() {
                 @Override

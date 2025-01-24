@@ -32,10 +32,10 @@
 
 package org.opensearch.search.aggregations.bucket.composite;
 
-import org.opensearch.common.ParseField;
-import org.opensearch.common.xcontent.ObjectParser;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.xcontent.ObjectParser;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.search.aggregations.ParsedMultiBucketAggregation;
 
 import java.io.IOException;
@@ -70,9 +70,9 @@ public class ParsedComposite extends ParsedMultiBucketAggregation<ParsedComposit
         ParsedComposite aggregation = PARSER.parse(parser, null);
         aggregation.setName(name);
         if (aggregation.afterKey == null && aggregation.getBuckets().size() > 0) {
-            /**
-             * Previous versions (< 6.3) don't send <code>afterKey</code>
-             * in the response so we set it as the last returned buckets.
+            /*
+              Previous versions (< 6.3) don't send <code>afterKey</code>
+              in the response so we set it as the last returned buckets.
              */
             aggregation.setAfterKey(aggregation.getBuckets().get(aggregation.getBuckets().size() - 1).key);
         }
@@ -130,8 +130,8 @@ public class ParsedComposite extends ParsedMultiBucketAggregation<ParsedComposit
 
         @Override
         public final XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-            /**
-             * See {@link CompositeAggregation#bucketToXContent}
+            /*
+              See {@link CompositeAggregation#bucketToXContent}
              */
             throw new UnsupportedOperationException("not implemented");
         }

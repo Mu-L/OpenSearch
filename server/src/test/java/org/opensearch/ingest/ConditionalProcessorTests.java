@@ -32,6 +32,7 @@
 
 package org.opensearch.ingest;
 
+import org.opensearch.common.metrics.OperationStats;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.script.IngestConditionalScript;
 import org.opensearch.script.MockScriptEngine;
@@ -164,21 +165,10 @@ public class ConditionalProcessorTests extends OpenSearchTestCase {
     }
 
     public void testPrecompiledError() {
-        ScriptService scriptService = MockScriptService.singleContext(
-            IngestConditionalScript.CONTEXT,
-            code -> {
-                throw new ScriptException(
-                    "bad script",
-                    new ParseException("error", 0),
-                    org.opensearch.common.collect.List.of(),
-                    "",
-                    "lang",
-                    null
-                );
-            },
-            org.opensearch.common.collect.Map.of()
-        );
-        Script script = new Script(ScriptType.INLINE, "lang", "foo", org.opensearch.common.collect.Map.of());
+        ScriptService scriptService = MockScriptService.singleContext(IngestConditionalScript.CONTEXT, code -> {
+            throw new ScriptException("bad script", new ParseException("error", 0), List.of(), "", "lang", null);
+        }, Map.of());
+        Script script = new Script(ScriptType.INLINE, "lang", "foo", Map.of());
         ScriptException e = expectThrows(ScriptException.class, () -> new ConditionalProcessor(null, null, script, scriptService, null));
         assertThat(e.getMessage(), equalTo("bad script"));
     }
@@ -186,17 +176,10 @@ public class ConditionalProcessorTests extends OpenSearchTestCase {
     public void testRuntimeCompileError() {
         AtomicBoolean fail = new AtomicBoolean(false);
         Map<String, StoredScriptSource> storedScripts = new HashMap<>();
-        storedScripts.put("foo", new StoredScriptSource("lang", "", org.opensearch.common.collect.Map.of()));
+        storedScripts.put("foo", new StoredScriptSource("lang", "", Map.of()));
         ScriptService scriptService = MockScriptService.singleContext(IngestConditionalScript.CONTEXT, code -> {
             if (fail.get()) {
-                throw new ScriptException(
-                    "bad script",
-                    new ParseException("error", 0),
-                    org.opensearch.common.collect.List.of(),
-                    "",
-                    "lang",
-                    null
-                );
+                throw new ScriptException("bad script", new ParseException("error", 0), List.of(), "", "lang", null);
             } else {
                 return params -> new IngestConditionalScript(params) {
                     @Override
@@ -206,12 +189,12 @@ public class ConditionalProcessorTests extends OpenSearchTestCase {
                 };
             }
         }, storedScripts);
-        Script script = new Script(ScriptType.STORED, null, "foo", org.opensearch.common.collect.Map.of());
+        Script script = new Script(ScriptType.STORED, null, "foo", Map.of());
         ConditionalProcessor processor = new ConditionalProcessor(null, null, script, scriptService, null);
         fail.set(true);
         // must change the script source or the cached version will be used
-        storedScripts.put("foo", new StoredScriptSource("lang", "changed", org.opensearch.common.collect.Map.of()));
-        IngestDocument ingestDoc = new IngestDocument(org.opensearch.common.collect.Map.of(), org.opensearch.common.collect.Map.of());
+        storedScripts.put("foo", new StoredScriptSource("lang", "changed", Map.of()));
+        IngestDocument ingestDoc = new IngestDocument(Map.of(), Map.of());
         processor.execute(ingestDoc, (doc, e) -> { assertThat(e.getMessage(), equalTo("bad script")); });
     }
 
@@ -224,11 +207,11 @@ public class ConditionalProcessorTests extends OpenSearchTestCase {
                     throw new IllegalArgumentException("runtime problem");
                 }
             },
-            org.opensearch.common.collect.Map.of()
+            Map.of()
         );
-        Script script = new Script(ScriptType.INLINE, "lang", "foo", org.opensearch.common.collect.Map.of());
+        Script script = new Script(ScriptType.INLINE, "lang", "foo", Map.of());
         ConditionalProcessor processor = new ConditionalProcessor(null, null, script, scriptService, null);
-        IngestDocument ingestDoc = new IngestDocument(org.opensearch.common.collect.Map.of(), org.opensearch.common.collect.Map.of());
+        IngestDocument ingestDoc = new IngestDocument(Map.of(), Map.of());
         processor.execute(ingestDoc, (doc, e) -> { assertThat(e.getMessage(), equalTo("runtime problem")); });
     }
 
@@ -268,10 +251,10 @@ public class ConditionalProcessorTests extends OpenSearchTestCase {
     }
 
     private static void assertStats(ConditionalProcessor conditionalProcessor, long count, long failed, long time) {
-        IngestStats.Stats stats = conditionalProcessor.getMetric().createStats();
-        assertThat(stats.getIngestCount(), equalTo(count));
-        assertThat(stats.getIngestCurrent(), equalTo(0L));
-        assertThat(stats.getIngestFailedCount(), equalTo(failed));
-        assertThat(stats.getIngestTimeInMillis(), greaterThanOrEqualTo(time));
+        OperationStats stats = conditionalProcessor.getMetric().createStats();
+        assertThat(stats.getCount(), equalTo(count));
+        assertThat(stats.getCurrent(), equalTo(0L));
+        assertThat(stats.getFailedCount(), equalTo(failed));
+        assertThat(stats.getTotalTimeInMillis(), greaterThanOrEqualTo(time));
     }
 }

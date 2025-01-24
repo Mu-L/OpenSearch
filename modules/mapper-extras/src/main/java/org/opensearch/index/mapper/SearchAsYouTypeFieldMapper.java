@@ -82,7 +82,7 @@ import static org.opensearch.index.mapper.TextFieldMapper.TextFieldType.hasGaps;
 /**
  * Mapper for a text field that optimizes itself for as-you-type completion by indexing its content into subfields. Each subfield
  * modifies the analysis chain of the root field to index terms the user would create as they type out the value in the root field
- *
+ * <p>
  * The structure of these fields is
  *
  * <pre>
@@ -264,7 +264,15 @@ public class SearchAsYouTypeFieldMapper extends ParametrizedFieldMapper {
             }
             ft.setPrefixField(prefixFieldType);
             ft.setShingleFields(shingleFieldTypes);
-            return new SearchAsYouTypeFieldMapper(name, ft, copyTo.build(), prefixFieldMapper, shingleFieldMappers, this);
+            return new SearchAsYouTypeFieldMapper(
+                name,
+                ft,
+                multiFieldsBuilder.build(this, context),
+                copyTo.build(),
+                prefixFieldMapper,
+                shingleFieldMappers,
+                this
+            );
         }
     }
 
@@ -618,17 +626,18 @@ public class SearchAsYouTypeFieldMapper extends ParametrizedFieldMapper {
     private final PrefixFieldMapper prefixField;
     private final ShingleFieldMapper[] shingleFields;
 
-    private final Builder builder;
+    private final IndexAnalyzers indexAnalyzers;
 
     public SearchAsYouTypeFieldMapper(
         String simpleName,
         SearchAsYouTypeFieldType mappedFieldType,
+        MultiFields multiFields,
         CopyTo copyTo,
         PrefixFieldMapper prefixField,
         ShingleFieldMapper[] shingleFields,
         Builder builder
     ) {
-        super(simpleName, mappedFieldType, MultiFields.empty(), copyTo);
+        super(simpleName, mappedFieldType, multiFields, copyTo);
         this.prefixField = prefixField;
         this.shingleFields = shingleFields;
         this.maxShingleSize = builder.maxShingleSize.getValue();
@@ -636,7 +645,7 @@ public class SearchAsYouTypeFieldMapper extends ParametrizedFieldMapper {
         this.store = builder.store.getValue();
         this.indexOptions = builder.indexOptions.getValue();
         this.termVectors = builder.termVectors.getValue();
-        this.builder = builder;
+        this.indexAnalyzers = builder.analyzers.indexAnalyzers;
     }
 
     @Override
@@ -663,7 +672,7 @@ public class SearchAsYouTypeFieldMapper extends ParametrizedFieldMapper {
 
     @Override
     public ParametrizedFieldMapper.Builder getMergeBuilder() {
-        return new Builder(simpleName(), builder.analyzers.indexAnalyzers).init(this);
+        return new Builder(simpleName(), this.indexAnalyzers).init(this);
     }
 
     public static String getShingleFieldName(String parentField, int shingleSize) {

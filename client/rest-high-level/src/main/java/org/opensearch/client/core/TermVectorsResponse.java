@@ -33,16 +33,17 @@
 package org.opensearch.client.core;
 
 import org.opensearch.common.Nullable;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.xcontent.ConstructingObjectParser;
-import org.opensearch.common.xcontent.XContentParser;
-import static org.opensearch.common.xcontent.ConstructingObjectParser.constructorArg;
-import static org.opensearch.common.xcontent.ConstructingObjectParser.optionalConstructorArg;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.xcontent.ConstructingObjectParser;
+import org.opensearch.core.xcontent.XContentParser;
 
 import java.util.Collections;
-import java.util.List;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Objects;
+
+import static org.opensearch.core.xcontent.ConstructingObjectParser.constructorArg;
+import static org.opensearch.core.xcontent.ConstructingObjectParser.optionalConstructorArg;
 
 public class TermVectorsResponse {
     private final String index;
@@ -240,7 +241,9 @@ public class TermVectorsResponse {
             private static final ConstructingObjectParser<FieldStatistics, Void> PARSER = new ConstructingObjectParser<>(
                 "field_statistics",
                 true,
-                args -> { return new FieldStatistics((long) args[0], (int) args[1], (long) args[2]); }
+                args -> {
+                    return new FieldStatistics((long) args[0], (int) args[1], (long) args[2]);
+                }
             );
 
             static {
@@ -411,11 +414,9 @@ public class TermVectorsResponse {
 
         public static final class Token {
 
-            private static final ConstructingObjectParser<Token, Void> PARSER = new ConstructingObjectParser<>(
-                "token",
-                true,
-                args -> { return new Token((Integer) args[0], (Integer) args[1], (Integer) args[2], (String) args[3]); }
-            );
+            private static final ConstructingObjectParser<Token, Void> PARSER = new ConstructingObjectParser<>("token", true, args -> {
+                return new Token((Integer) args[0], (Integer) args[1], (Integer) args[2], (String) args[3]);
+            });
             static {
                 PARSER.declareInt(optionalConstructorArg(), new ParseField("start_offset"));
                 PARSER.declareInt(optionalConstructorArg(), new ParseField("end_offset"));

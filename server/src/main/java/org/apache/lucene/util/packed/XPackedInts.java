@@ -16,9 +16,6 @@
  */
 package org.apache.lucene.util.packed;
 
-import java.io.EOFException;
-import java.io.IOException;
-import java.util.Arrays;
 import org.apache.lucene.codecs.CodecUtil;
 import org.apache.lucene.store.DataInput;
 import org.apache.lucene.store.DataOutput;
@@ -32,11 +29,15 @@ import org.apache.lucene.util.packed.PackedInts.Reader;
 import org.apache.lucene.util.packed.PackedInts.ReaderIterator;
 import org.apache.lucene.util.packed.PackedInts.Writer;
 
+import java.io.EOFException;
+import java.io.IOException;
+import java.util.Arrays;
+
 /**
  * Forked from Lucene 8.x; removed in Lucene 8.9
- *
+ * <p>
  * Todo: further investigate a better alternative
- *
+ * <p>
  * Simplistic compression for array of unsigned long values. Each value is {@code >= 0} and {@code
  * <=} a specified maximum value. The values are stored as packed ints, with each value consuming a
  * fixed number of bits.
@@ -533,7 +534,7 @@ public class XPackedInts {
      */
     public static Mutable getMutable(int valueCount, int bitsPerValue, float acceptableOverheadRatio) {
         final FormatAndBits formatAndBits = fastestFormatAndBits(valueCount, bitsPerValue, acceptableOverheadRatio);
-        return getMutable(valueCount, formatAndBits.bitsPerValue, formatAndBits.format);
+        return getMutable(valueCount, formatAndBits.bitsPerValue(), formatAndBits.format());
     }
 
     /**
@@ -628,7 +629,13 @@ public class XPackedInts {
         assert valueCount >= 0;
 
         final FormatAndBits formatAndBits = fastestFormatAndBits(valueCount, bitsPerValue, acceptableOverheadRatio);
-        final XWriter writer = getWriterNoHeader(out, formatAndBits.format, valueCount, formatAndBits.bitsPerValue, DEFAULT_BUFFER_SIZE);
+        final XWriter writer = getWriterNoHeader(
+            out,
+            formatAndBits.format(),
+            valueCount,
+            formatAndBits.bitsPerValue(),
+            DEFAULT_BUFFER_SIZE
+        );
         writer.writeHeader();
         return writer;
     }

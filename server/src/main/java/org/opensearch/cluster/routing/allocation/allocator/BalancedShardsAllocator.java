@@ -35,22 +35,29 @@ package org.opensearch.cluster.routing.allocation.allocator;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.lucene.util.IntroSorter;
+import org.opensearch.cluster.routing.RerouteService;
 import org.opensearch.cluster.routing.RoutingNode;
 import org.opensearch.cluster.routing.RoutingNodes;
+import org.opensearch.cluster.routing.ShardMovementStrategy;
 import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.cluster.routing.UnassignedInfo;
 import org.opensearch.cluster.routing.UnassignedInfo.AllocationStatus;
 import org.opensearch.cluster.routing.allocation.AllocateUnassignedDecision;
 import org.opensearch.cluster.routing.allocation.AllocationConstraints;
+import org.opensearch.cluster.routing.allocation.ConstraintTypes;
 import org.opensearch.cluster.routing.allocation.MoveDecision;
+import org.opensearch.cluster.routing.allocation.RebalanceConstraints;
+import org.opensearch.cluster.routing.allocation.RebalanceParameter;
 import org.opensearch.cluster.routing.allocation.RoutingAllocation;
 import org.opensearch.cluster.routing.allocation.ShardAllocationDecision;
+import org.opensearch.common.Priority;
 import org.opensearch.common.inject.Inject;
 import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Setting.Property;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.util.FeatureFlags;
+import org.opensearch.common.unit.TimeValue;
+import org.opensearch.core.action.ActionListener;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -58,9 +65,14 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 
+import static org.opensearch.cluster.routing.allocation.ConstraintTypes.CLUSTER_PRIMARY_SHARD_BALANCE_CONSTRAINT_ID;
+import static org.opensearch.cluster.routing.allocation.ConstraintTypes.CLUSTER_PRIMARY_SHARD_REBALANCE_CONSTRAINT_ID;
+import static org.opensearch.cluster.routing.allocation.ConstraintTypes.INDEX_PRIMARY_SHARD_BALANCE_CONSTRAINT_ID;
+import static org.opensearch.cluster.routing.allocation.ConstraintTypes.INDEX_SHARD_PER_NODE_BREACH_CONSTRAINT_ID;
+
 /**
  * The {@link BalancedShardsAllocator} re-balances the nodes allocations
- * within an cluster based on a {@link WeightFunction}. The clusters balance is defined by four parameters which can be set
+ * within a cluster based on a {@link WeightFunction}. The clusters balance is defined by four parameters which can be set
  * in the cluster update API that allows changes in real-time:
  * <ul><li><code>cluster.routing.allocation.balance.shard</code> - The <b>shard balance</b> defines the weight factor
  * for shards allocated on a {@link RoutingNode}</li>
@@ -68,6 +80,7 @@ import java.util.Set;
  * of {@link org.opensearch.cluster.routing.ShardRouting}s per index allocated on a specific node</li>
  * <li><code>cluster.routing.allocation.balance.threshold</code> - A <b>threshold</b> to set the minimal optimization
  * value of operations that should be performed</li>
+ * <li><code>cluster.routing.allocation.balance.prefer_primary</code> - Defines whether primary shard balance is desired</li>
  * </ul>
  * <p>
  * These parameters are combined in a {@link WeightFunction} that allows calculation of node weights which
@@ -78,6 +91,7 @@ import java.util.Set;
 public class BalancedShardsAllocator implements ShardsAllocator {
 
     private static final Logger logger = LogManager.getLogger(BalancedShardsAllocator.class);
+    public static final TimeValue MIN_ALLOCATOR_TIMEOUT = TimeValue.timeValueSeconds(20);
 
     public static final Setting<Float> INDEX_BALANCE_FACTOR_SETTING = Setting.floatSetting(
         "cluster.routing.allocation.balance.index",
@@ -93,12 +107,30 @@ public class BalancedShardsAllocator implements ShardsAllocator {
         Property.Dynamic,
         Property.NodeScope
     );
+
+    /**
+     * Move primary shards first from node for shard movement when shards can not stay on node anymore. {@link LocalShardsBalancer#moveShards()}
+     */
     public static final Setting<Boolean> SHARD_MOVE_PRIMARY_FIRST_SETTING = Setting.boolSetting(
         "cluster.routing.allocation.move.primary_first",
         false,
         Property.Dynamic,
+        Property.NodeScope,
+        Property.Deprecated
+    );
+
+    /**
+     * Decides order in which to move shards from node when shards can not stay on node anymore. {@link LocalShardsBalancer#moveShards()}
+     * Encapsulates behavior of above SHARD_MOVE_PRIMARY_FIRST_SETTING.
+     */
+    public static final Setting<ShardMovementStrategy> SHARD_MOVEMENT_STRATEGY_SETTING = new Setting<ShardMovementStrategy>(
+        "cluster.routing.allocation.shard_movement_strategy",
+        ShardMovementStrategy.NO_PREFERENCE.toString(),
+        ShardMovementStrategy::parse,
+        Property.Dynamic,
         Property.NodeScope
     );
+
     public static final Setting<Float> THRESHOLD_SETTING = Setting.floatSetting(
         "cluster.routing.allocation.balance.threshold",
         1.0f,
@@ -107,9 +139,82 @@ public class BalancedShardsAllocator implements ShardsAllocator {
         Property.NodeScope
     );
 
+    public static final Setting<Long> PRIMARY_CONSTRAINT_THRESHOLD_SETTING = Setting.longSetting(
+        "cluster.routing.allocation.primary_constraint.threshold",
+        10,
+        0,
+        Property.Dynamic,
+        Property.NodeScope
+    );
+
+    /**
+     * This setting governs whether primary shards balance is desired during allocation. This is used by {@link ConstraintTypes#isPerIndexPrimaryShardsPerNodeBreached()}
+     * and {@link ConstraintTypes#isPrimaryShardsPerNodeBreached} which is used during unassigned shard allocation
+     * {@link LocalShardsBalancer#allocateUnassigned()} and shard re-balance/relocation to a different node via {@link LocalShardsBalancer#balance()} .
+     */
+
+    public static final Setting<Boolean> PREFER_PRIMARY_SHARD_BALANCE = Setting.boolSetting(
+        "cluster.routing.allocation.balance.prefer_primary",
+        false,
+        Property.Dynamic,
+        Property.NodeScope
+    );
+
+    public static final Setting<Boolean> PREFER_PRIMARY_SHARD_REBALANCE = Setting.boolSetting(
+        "cluster.routing.allocation.rebalance.primary.enable",
+        false,
+        Property.Dynamic,
+        Property.NodeScope
+    );
+
+    public static final Setting<Boolean> IGNORE_THROTTLE_FOR_REMOTE_RESTORE = Setting.boolSetting(
+        "cluster.routing.allocation.remote_primary.ignore_throttle",
+        true,
+        Property.Dynamic,
+        Property.NodeScope
+    );
+
+    public static final Setting<Float> PRIMARY_SHARD_REBALANCE_BUFFER = Setting.floatSetting(
+        "cluster.routing.allocation.rebalance.primary.buffer",
+        0.10f,
+        0.0f,
+        Property.Dynamic,
+        Property.NodeScope
+    );
+
+    public static final Setting<TimeValue> ALLOCATOR_TIMEOUT_SETTING = Setting.timeSetting(
+        "cluster.routing.allocation.balanced_shards_allocator.allocator_timeout",
+        TimeValue.MINUS_ONE,
+        TimeValue.MINUS_ONE,
+        timeValue -> {
+            if (timeValue.compareTo(MIN_ALLOCATOR_TIMEOUT) < 0 && timeValue.compareTo(TimeValue.MINUS_ONE) != 0) {
+                throw new IllegalArgumentException(
+                    "Setting ["
+                        + "cluster.routing.allocation.balanced_shards_allocator.allocator_timeout"
+                        + "] should be more than 20s or -1ms to disable timeout"
+                );
+            }
+        },
+        Setting.Property.NodeScope,
+        Setting.Property.Dynamic
+    );
+
     private volatile boolean movePrimaryFirst;
+    private volatile ShardMovementStrategy shardMovementStrategy;
+
+    private volatile boolean preferPrimaryShardBalance;
+    private volatile boolean preferPrimaryShardRebalance;
+    private volatile float preferPrimaryShardRebalanceBuffer;
+    private volatile float indexBalanceFactor;
+    private volatile float shardBalanceFactor;
     private volatile WeightFunction weightFunction;
     private volatile float threshold;
+    private volatile long primaryConstraintThreshold;
+
+    private volatile boolean ignoreThrottleInRestore;
+    private volatile TimeValue allocatorTimeout;
+    private long startTime;
+    private RerouteService rerouteService;
 
     public BalancedShardsAllocator(Settings settings) {
         this(settings, new ClusterSettings(settings, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS));
@@ -117,23 +222,134 @@ public class BalancedShardsAllocator implements ShardsAllocator {
 
     @Inject
     public BalancedShardsAllocator(Settings settings, ClusterSettings clusterSettings) {
-        setWeightFunction(INDEX_BALANCE_FACTOR_SETTING.get(settings), SHARD_BALANCE_FACTOR_SETTING.get(settings));
+        setShardBalanceFactor(SHARD_BALANCE_FACTOR_SETTING.get(settings));
+        setIndexBalanceFactor(INDEX_BALANCE_FACTOR_SETTING.get(settings));
+        setPreferPrimaryShardRebalanceBuffer(PRIMARY_SHARD_REBALANCE_BUFFER.get(settings));
+        setIgnoreThrottleInRestore(IGNORE_THROTTLE_FOR_REMOTE_RESTORE.get(settings));
+        updateWeightFunction();
         setThreshold(THRESHOLD_SETTING.get(settings));
+        setPrimaryConstraintThresholdSetting(PRIMARY_CONSTRAINT_THRESHOLD_SETTING.get(settings));
+        setPreferPrimaryShardBalance(PREFER_PRIMARY_SHARD_BALANCE.get(settings));
+        setPreferPrimaryShardRebalance(PREFER_PRIMARY_SHARD_REBALANCE.get(settings));
+        setShardMovementStrategy(SHARD_MOVEMENT_STRATEGY_SETTING.get(settings));
+        setAllocatorTimeout(ALLOCATOR_TIMEOUT_SETTING.get(settings));
+        clusterSettings.addSettingsUpdateConsumer(PREFER_PRIMARY_SHARD_BALANCE, this::setPreferPrimaryShardBalance);
         clusterSettings.addSettingsUpdateConsumer(SHARD_MOVE_PRIMARY_FIRST_SETTING, this::setMovePrimaryFirst);
-        clusterSettings.addSettingsUpdateConsumer(INDEX_BALANCE_FACTOR_SETTING, SHARD_BALANCE_FACTOR_SETTING, this::setWeightFunction);
+        clusterSettings.addSettingsUpdateConsumer(SHARD_MOVEMENT_STRATEGY_SETTING, this::setShardMovementStrategy);
+        clusterSettings.addSettingsUpdateConsumer(INDEX_BALANCE_FACTOR_SETTING, this::updateIndexBalanceFactor);
+        clusterSettings.addSettingsUpdateConsumer(SHARD_BALANCE_FACTOR_SETTING, this::updateShardBalanceFactor);
+        clusterSettings.addSettingsUpdateConsumer(PRIMARY_SHARD_REBALANCE_BUFFER, this::updatePreferPrimaryShardBalanceBuffer);
+        clusterSettings.addSettingsUpdateConsumer(PREFER_PRIMARY_SHARD_REBALANCE, this::setPreferPrimaryShardRebalance);
         clusterSettings.addSettingsUpdateConsumer(THRESHOLD_SETTING, this::setThreshold);
+        clusterSettings.addSettingsUpdateConsumer(PRIMARY_CONSTRAINT_THRESHOLD_SETTING, this::setPrimaryConstraintThresholdSetting);
+        clusterSettings.addSettingsUpdateConsumer(IGNORE_THROTTLE_FOR_REMOTE_RESTORE, this::setIgnoreThrottleInRestore);
+        clusterSettings.addSettingsUpdateConsumer(ALLOCATOR_TIMEOUT_SETTING, this::setAllocatorTimeout);
     }
 
+    @Override
+    public void setRerouteService(RerouteService rerouteService) {
+        assert this.rerouteService == null : "RerouteService is already set";
+        this.rerouteService = rerouteService;
+    }
+
+    /**
+     * Changes in deprecated setting SHARD_MOVE_PRIMARY_FIRST_SETTING affect value of its replacement setting SHARD_MOVEMENT_STRATEGY_SETTING.
+     */
     private void setMovePrimaryFirst(boolean movePrimaryFirst) {
         this.movePrimaryFirst = movePrimaryFirst;
+        setShardMovementStrategy(this.shardMovementStrategy);
     }
 
-    private void setWeightFunction(float indexBalance, float shardBalanceFactor) {
-        weightFunction = new WeightFunction(indexBalance, shardBalanceFactor);
+    private void setIgnoreThrottleInRestore(boolean ignoreThrottleInRestore) {
+        this.ignoreThrottleInRestore = ignoreThrottleInRestore;
+    }
+
+    /**
+     * Sets the correct Shard movement strategy to use.
+     * If users are still using deprecated setting `move_primary_first`, we want behavior to remain unchanged.
+     * In the event of changing ShardMovementStrategy setting from default setting NO_PREFERENCE to either PRIMARY_FIRST or REPLICA_FIRST, we want that
+     * to have priority over values set in move_primary_first setting.
+     */
+    private void setShardMovementStrategy(ShardMovementStrategy shardMovementStrategy) {
+        this.shardMovementStrategy = shardMovementStrategy;
+        if (shardMovementStrategy == ShardMovementStrategy.NO_PREFERENCE && this.movePrimaryFirst) {
+            this.shardMovementStrategy = ShardMovementStrategy.PRIMARY_FIRST;
+        }
+    }
+
+    private void setIndexBalanceFactor(float indexBalanceFactor) {
+        this.indexBalanceFactor = indexBalanceFactor;
+    }
+
+    private void setShardBalanceFactor(float shardBalanceFactor) {
+        this.shardBalanceFactor = shardBalanceFactor;
+    }
+
+    private void setPreferPrimaryShardRebalanceBuffer(float preferPrimaryShardRebalanceBuffer) {
+        this.preferPrimaryShardRebalanceBuffer = preferPrimaryShardRebalanceBuffer;
+    }
+
+    private void updateIndexBalanceFactor(float indexBalanceFactor) {
+        this.indexBalanceFactor = indexBalanceFactor;
+        updateWeightFunction();
+    }
+
+    private void updateShardBalanceFactor(float shardBalanceFactor) {
+        this.shardBalanceFactor = shardBalanceFactor;
+        updateWeightFunction();
+    }
+
+    private void updatePreferPrimaryShardBalanceBuffer(float preferPrimaryShardBalanceBuffer) {
+        this.preferPrimaryShardRebalanceBuffer = preferPrimaryShardBalanceBuffer;
+        updateWeightFunction();
+    }
+
+    private void updateWeightFunction() {
+        weightFunction = new WeightFunction(
+            this.indexBalanceFactor,
+            this.shardBalanceFactor,
+            this.preferPrimaryShardRebalanceBuffer,
+            this.primaryConstraintThreshold
+        );
+    }
+
+    /**
+     * When primary shards balance is desired, enable primary shard balancing constraints
+     * @param preferPrimaryShardBalance boolean to prefer balancing by primary shard
+     */
+    private void setPreferPrimaryShardBalance(boolean preferPrimaryShardBalance) {
+        this.preferPrimaryShardBalance = preferPrimaryShardBalance;
+        this.weightFunction.updateAllocationConstraint(INDEX_PRIMARY_SHARD_BALANCE_CONSTRAINT_ID, preferPrimaryShardBalance);
+        this.weightFunction.updateAllocationConstraint(CLUSTER_PRIMARY_SHARD_BALANCE_CONSTRAINT_ID, preferPrimaryShardBalance);
+        this.weightFunction.updateRebalanceConstraint(INDEX_PRIMARY_SHARD_BALANCE_CONSTRAINT_ID, preferPrimaryShardBalance);
+    }
+
+    private void setPreferPrimaryShardRebalance(boolean preferPrimaryShardRebalance) {
+        this.preferPrimaryShardRebalance = preferPrimaryShardRebalance;
+        this.weightFunction.updateRebalanceConstraint(CLUSTER_PRIMARY_SHARD_REBALANCE_CONSTRAINT_ID, preferPrimaryShardRebalance);
     }
 
     private void setThreshold(float threshold) {
         this.threshold = threshold;
+    }
+
+    private void setPrimaryConstraintThresholdSetting(long threshold) {
+        this.primaryConstraintThreshold = threshold;
+        this.weightFunction.updatePrimaryConstraintThreshold(threshold);
+    }
+
+    private void setAllocatorTimeout(TimeValue allocatorTimeout) {
+        this.allocatorTimeout = allocatorTimeout;
+    }
+
+    protected boolean allocatorTimedOut() {
+        if (allocatorTimeout.equals(TimeValue.MINUS_ONE)) {
+            if (logger.isTraceEnabled()) {
+                logger.trace("Allocator timeout is disabled. Will not short circuit allocator tasks");
+            }
+            return false;
+        }
+        return System.nanoTime() - this.startTime > allocatorTimeout.nanos();
     }
 
     @Override
@@ -142,22 +358,43 @@ public class BalancedShardsAllocator implements ShardsAllocator {
             failAllocationOfNewPrimaries(allocation);
             return;
         }
-        final ShardsBalancer localShardsBalancer = new LocalShardsBalancer(logger, allocation, movePrimaryFirst, weightFunction, threshold);
+        final ShardsBalancer localShardsBalancer = new LocalShardsBalancer(
+            logger,
+            allocation,
+            shardMovementStrategy,
+            weightFunction,
+            threshold,
+            preferPrimaryShardBalance,
+            preferPrimaryShardRebalance,
+            ignoreThrottleInRestore,
+            this::allocatorTimedOut
+        );
+        this.startTime = System.nanoTime();
         localShardsBalancer.allocateUnassigned();
         localShardsBalancer.moveShards();
         localShardsBalancer.balance();
+        scheduleRerouteIfAllocatorTimedOut();
 
-        if (FeatureFlags.isEnabled(FeatureFlags.SEARCHABLE_SNAPSHOT)) {
-            final ShardsBalancer remoteShardsBalancer = new RemoteShardsBalancer(logger, allocation);
-            remoteShardsBalancer.allocateUnassigned();
-            remoteShardsBalancer.moveShards();
-            remoteShardsBalancer.balance();
-        }
+        final ShardsBalancer remoteShardsBalancer = new RemoteShardsBalancer(logger, allocation);
+        remoteShardsBalancer.allocateUnassigned();
+        remoteShardsBalancer.moveShards();
+        remoteShardsBalancer.balance();
+
     }
 
     @Override
     public ShardAllocationDecision decideShardAllocation(final ShardRouting shard, final RoutingAllocation allocation) {
-        ShardsBalancer localShardsBalancer = new LocalShardsBalancer(logger, allocation, movePrimaryFirst, weightFunction, threshold);
+        ShardsBalancer localShardsBalancer = new LocalShardsBalancer(
+            logger,
+            allocation,
+            shardMovementStrategy,
+            weightFunction,
+            threshold,
+            preferPrimaryShardBalance,
+            preferPrimaryShardRebalance,
+            ignoreThrottleInRestore,
+            () -> false // as we don't need to check if timed out or not while just understanding ShardAllocationDecision
+        );
         AllocateUnassignedDecision allocateUnassignedDecision = AllocateUnassignedDecision.NOT_TAKEN;
         MoveDecision moveDecision = MoveDecision.NOT_TAKEN;
         if (shard.unassigned()) {
@@ -199,6 +436,20 @@ public class BalancedShardsAllocator implements ShardsAllocator {
         }
     }
 
+    private void scheduleRerouteIfAllocatorTimedOut() {
+        if (allocatorTimedOut()) {
+            assert rerouteService != null : "RerouteService not set to schedule reroute after allocator time out";
+            rerouteService.reroute(
+                "reroute after balanced shards allocator timed out",
+                Priority.HIGH,
+                ActionListener.wrap(
+                    r -> logger.trace("reroute after balanced shards allocator timed out completed"),
+                    e -> logger.debug("reroute after balanced shards allocator timed out failed", e)
+                )
+            );
+        }
+    }
+
     /**
      * Returns the currently configured delta threshold
      */
@@ -218,6 +469,13 @@ public class BalancedShardsAllocator implements ShardsAllocator {
      */
     public float getShardBalance() {
         return weightFunction.shardBalance;
+    }
+
+    /**
+     * Returns preferPrimaryShardBalance.
+     */
+    public boolean getPreferPrimaryBalance() {
+        return preferPrimaryShardBalance;
     }
 
     /**
@@ -243,7 +501,7 @@ public class BalancedShardsAllocator implements ShardsAllocator {
      * </li>
      * </ul>
      * <code>weight(node, index) = weight<sub>index</sub>(node, index) + weight<sub>node</sub>(node, index)</code>
-     *
+     * <p>
      * package-private for testing
      */
     static class WeightFunction {
@@ -252,9 +510,11 @@ public class BalancedShardsAllocator implements ShardsAllocator {
         private final float shardBalance;
         private final float theta0;
         private final float theta1;
+        private long primaryConstraintThreshold;
         private AllocationConstraints constraints;
+        private RebalanceConstraints rebalanceConstraints;
 
-        WeightFunction(float indexBalance, float shardBalance) {
+        WeightFunction(float indexBalance, float shardBalance, float preferPrimaryBalanceBuffer, long primaryConstraintThreshold) {
             float sum = indexBalance + shardBalance;
             if (sum <= 0.0f) {
                 throw new IllegalArgumentException("Balance factors must sum to a value > 0 but was: " + sum);
@@ -263,18 +523,40 @@ public class BalancedShardsAllocator implements ShardsAllocator {
             theta1 = indexBalance / sum;
             this.indexBalance = indexBalance;
             this.shardBalance = shardBalance;
+            this.primaryConstraintThreshold = primaryConstraintThreshold;
+            RebalanceParameter rebalanceParameter = new RebalanceParameter(preferPrimaryBalanceBuffer);
             this.constraints = new AllocationConstraints();
+            this.rebalanceConstraints = new RebalanceConstraints(rebalanceParameter);
+            // Enable index shard per node breach constraint
+            updateAllocationConstraint(INDEX_SHARD_PER_NODE_BREACH_CONSTRAINT_ID, true);
         }
 
         public float weightWithAllocationConstraints(ShardsBalancer balancer, ModelNode node, String index) {
             float balancerWeight = weight(balancer, node, index);
-            return balancerWeight + constraints.weight(balancer, node, index);
+            return balancerWeight + constraints.weight(balancer, node, index, primaryConstraintThreshold);
+        }
+
+        public float weightWithRebalanceConstraints(ShardsBalancer balancer, ModelNode node, String index) {
+            float balancerWeight = weight(balancer, node, index);
+            return balancerWeight + rebalanceConstraints.weight(balancer, node, index, primaryConstraintThreshold);
         }
 
         float weight(ShardsBalancer balancer, ModelNode node, String index) {
             final float weightShard = node.numShards() - balancer.avgShardsPerNode();
             final float weightIndex = node.numShards(index) - balancer.avgShardsPerNode(index);
             return theta0 * weightShard + theta1 * weightIndex;
+        }
+
+        void updateAllocationConstraint(String constraint, boolean enable) {
+            this.constraints.updateAllocationConstraint(constraint, enable);
+        }
+
+        void updateRebalanceConstraint(String constraint, boolean add) {
+            this.rebalanceConstraints.updateRebalanceConstraint(constraint, add);
+        }
+
+        void updatePrimaryConstraintThreshold(long primaryConstraintThreshold) {
+            this.primaryConstraintThreshold = primaryConstraintThreshold;
         }
     }
 
@@ -286,6 +568,7 @@ public class BalancedShardsAllocator implements ShardsAllocator {
     public static class ModelNode implements Iterable<ModelIndex> {
         private final Map<String, ModelIndex> indices = new HashMap<>();
         private int numShards = 0;
+        private int numPrimaryShards = 0;
         private final RoutingNode routingNode;
 
         ModelNode(RoutingNode routingNode) {
@@ -313,6 +596,15 @@ public class BalancedShardsAllocator implements ShardsAllocator {
             return index == null ? 0 : index.numShards();
         }
 
+        public int numPrimaryShards(String idx) {
+            ModelIndex index = indices.get(idx);
+            return index == null ? 0 : index.numPrimaryShards();
+        }
+
+        public int numPrimaryShards() {
+            return numPrimaryShards;
+        }
+
         public int highestPrimary(String index) {
             ModelIndex idx = indices.get(index);
             if (idx != null) {
@@ -328,6 +620,10 @@ public class BalancedShardsAllocator implements ShardsAllocator {
                 indices.put(index.getIndexId(), index);
             }
             index.addShard(shard);
+            if (shard.primary()) {
+                numPrimaryShards++;
+            }
+
             numShards++;
         }
 
@@ -339,6 +635,11 @@ public class BalancedShardsAllocator implements ShardsAllocator {
                     indices.remove(shard.getIndexName());
                 }
             }
+
+            if (shard.primary()) {
+                numPrimaryShards--;
+            }
+
             numShards--;
         }
 
@@ -358,7 +659,6 @@ public class BalancedShardsAllocator implements ShardsAllocator {
             ModelIndex index = getIndex(shard.getIndexName());
             return index == null ? false : index.containsShard(shard);
         }
-
     }
 
     /**
@@ -372,11 +672,12 @@ public class BalancedShardsAllocator implements ShardsAllocator {
         public Balancer(
             Logger logger,
             RoutingAllocation allocation,
-            boolean movePrimaryFirst,
+            ShardMovementStrategy shardMovementStrategy,
             BalancedShardsAllocator.WeightFunction weight,
-            float threshold
+            float threshold,
+            boolean preferPrimaryBalance
         ) {
-            super(logger, allocation, movePrimaryFirst, weight, threshold);
+            super(logger, allocation, shardMovementStrategy, weight, threshold, preferPrimaryBalance, false, false, () -> false);
         }
     }
 
@@ -388,10 +689,15 @@ public class BalancedShardsAllocator implements ShardsAllocator {
     static final class ModelIndex implements Iterable<ShardRouting> {
         private final String id;
         private final Set<ShardRouting> shards = new HashSet<>(4); // expect few shards of same index to be allocated on same node
+        private final Set<ShardRouting> primaryShards = new HashSet<>();
         private int highestPrimary = -1;
 
         ModelIndex(String id) {
             this.id = id;
+        }
+
+        public int numPrimaryShards() {
+            return primaryShards.size();
         }
 
         public int highestPrimary() {
@@ -423,12 +729,20 @@ public class BalancedShardsAllocator implements ShardsAllocator {
         public void removeShard(ShardRouting shard) {
             highestPrimary = -1;
             assert shards.contains(shard) : "Shard not allocated on current node: " + shard;
+            if (shard.primary()) {
+                assert primaryShards.contains(shard) : "Primary shard not allocated on current node: " + shard;
+                primaryShards.remove(shard);
+            }
             shards.remove(shard);
         }
 
         public void addShard(ShardRouting shard) {
             highestPrimary = -1;
-            assert !shards.contains(shard) : "Shard already allocated on current node: " + shard;
+            assert shards.contains(shard) == false : "Shard already allocated on current node: " + shard;
+            if (shard.primary()) {
+                assert primaryShards.contains(shard) == false : "Primary shard already allocated on current node: " + shard;
+                primaryShards.add(shard);
+            }
             shards.add(shard);
         }
 
@@ -476,7 +790,7 @@ public class BalancedShardsAllocator implements ShardsAllocator {
         }
 
         public float weight(ModelNode node) {
-            return function.weight(balancer, node, index);
+            return function.weightWithRebalanceConstraints(balancer, node, index);
         }
 
         @Override

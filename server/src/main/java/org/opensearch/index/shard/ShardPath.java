@@ -32,10 +32,12 @@
 package org.opensearch.index.shard;
 
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.util.Strings;
-import org.opensearch.core.internal.io.IOUtils;
 import org.opensearch.cluster.metadata.IndexMetadata;
-import org.opensearch.common.xcontent.NamedXContentRegistry;
+import org.opensearch.common.annotation.PublicApi;
+import org.opensearch.common.util.io.IOUtils;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.index.shard.ShardId;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
 import org.opensearch.env.NodeEnvironment;
 import org.opensearch.env.ShardLock;
 import org.opensearch.index.IndexSettings;
@@ -53,8 +55,9 @@ import java.util.Objects;
 /**
  * Path for a shard
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public final class ShardPath {
     public static final String INDEX_FOLDER_NAME = "index";
     public static final String TRANSLOG_FOLDER_NAME = "translog";
@@ -131,6 +134,16 @@ public final class ShardPath {
     }
 
     /**
+     * Returns the shard path to be stored within the cache on the search capable node.
+     */
+    public static ShardPath loadFileCachePath(NodeEnvironment env, ShardId shardId) {
+        NodeEnvironment.NodePath path = env.fileCacheNodePath();
+        final Path dataPath = env.resolveFileCacheLocation(path.fileCachePath, shardId);
+        final Path statePath = path.resolve(shardId);
+        return new ShardPath(true, dataPath, statePath, shardId);
+    }
+
+    /**
      * This method walks through the nodes shard paths to find the data and state path for the given shard. If multiple
      * directories with a valid shard state exist the one with the highest version will be used.
      * <b>Note:</b> this method resolves custom data locations for the shard if such a custom data path is provided.
@@ -192,7 +205,7 @@ public final class ShardPath {
         } else {
             final Path dataPath;
             final Path statePath = loadedPath;
-            final boolean hasCustomDataPath = Strings.isNotEmpty(customDataPath);
+            final boolean hasCustomDataPath = !Strings.isNullOrEmpty(customDataPath);
             if (hasCustomDataPath) {
                 dataPath = NodeEnvironment.resolveCustomLocation(customDataPath, shardId, sharedDataPath, nodeLockId);
             } else {

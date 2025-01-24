@@ -39,12 +39,12 @@ import org.apache.lucene.document.SortedSetDocValuesField;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexableField;
-import org.apache.lucene.tests.index.RandomIndexWriter;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.MatchNoDocsQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.tests.index.RandomIndexWriter;
 import org.apache.lucene.util.BytesRef;
 import org.opensearch.Version;
 import org.opensearch.cluster.metadata.IndexMetadata;
@@ -305,7 +305,7 @@ public class AutoDateHistogramAggregatorTests extends DateHistogramAggregatorTes
             int n = 0;
             for (long d = start; d < end; d += anHour) {
                 docs.add(
-                    org.opensearch.common.collect.List.of(
+                    List.of(
                         new SortedNumericDocValuesField(AGGREGABLE_DATE, d),
                         new SortedSetDocValuesField("k1", aBytes),
                         new SortedSetDocValuesField("k1", d < useC ? bBytes : cBytes),
@@ -373,12 +373,7 @@ public class AutoDateHistogramAggregatorTests extends DateHistogramAggregatorTes
             List<List<IndexableField>> docs = new ArrayList<>();
             int n = 0;
             for (long d = start; d < end; d += anHour) {
-                docs.add(
-                    org.opensearch.common.collect.List.of(
-                        new SortedNumericDocValuesField(AGGREGABLE_DATE, d),
-                        new SortedNumericDocValuesField("n", n % 100)
-                    )
-                );
+                docs.add(List.of(new SortedNumericDocValuesField(AGGREGABLE_DATE, d), new SortedNumericDocValuesField("n", n % 100)));
                 n++;
             }
             /*
@@ -974,6 +969,7 @@ public class AutoDateHistogramAggregatorTests extends DateHistogramAggregatorTes
         for (final ZonedDateTime date : dataset) {
             final long instant = date.toInstant().toEpochMilli();
             document.add(new SortedNumericDocValuesField(DATE_FIELD, instant));
+            document.add(new LongPoint(DATE_FIELD, instant));
             document.add(new LongPoint(INSTANT_FIELD, instant));
             document.add(new SortedNumericDocValuesField(NUMERIC_FIELD, i));
             indexWriter.addDocument(document);

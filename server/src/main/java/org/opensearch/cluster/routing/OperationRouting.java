@@ -32,23 +32,30 @@
 
 package org.opensearch.cluster.routing;
 
+import org.apache.lucene.util.CollectionUtil;
 import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.cluster.metadata.WeightedRoutingMetadata;
 import org.opensearch.cluster.node.DiscoveryNodes;
 import org.opensearch.cluster.routing.allocation.decider.AwarenessAllocationDecider;
 import org.opensearch.common.Nullable;
-import org.opensearch.common.Strings;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Settings;
+import org.opensearch.common.util.FeatureFlags;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.index.Index;
+import org.opensearch.core.index.shard.ShardId;
+import org.opensearch.index.IndexModule;
 import org.opensearch.index.IndexNotFoundException;
-import org.opensearch.index.shard.ShardId;
 import org.opensearch.node.ResponseCollectorService;
+import org.opensearch.search.slice.SliceBuilder;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -58,8 +65,9 @@ import java.util.stream.Collectors;
 /**
  * Routes cluster operations
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class OperationRouting {
 
     public static final Setting<Boolean> USE_ADAPTIVE_REPLICA_SELECTION_SETTING = Setting.boolSetting(
@@ -83,10 +91,41 @@ public class OperationRouting {
         Setting.Property.Dynamic,
         Setting.Property.NodeScope
     );
+
+    public static final Setting<Boolean> WEIGHTED_ROUTING_FAILOPEN_ENABLED = Setting.boolSetting(
+        "cluster.routing.weighted.fail_open",
+        true,
+        Setting.Property.Dynamic,
+        Setting.Property.NodeScope
+    );
+
+    public static final Setting<Boolean> STRICT_WEIGHTED_SHARD_ROUTING_ENABLED = Setting.boolSetting(
+        "cluster.routing.weighted.strict",
+        true,
+        Setting.Property.Dynamic,
+        Setting.Property.NodeScope
+    );
+
+    public static final Setting<Boolean> IGNORE_WEIGHTED_SHARD_ROUTING = Setting.boolSetting(
+        "cluster.routing.ignore_weighted_routing",
+        false,
+        Setting.Property.Dynamic,
+        Setting.Property.NodeScope
+    );
+
+    private static final List<Preference> WEIGHTED_ROUTING_RESTRICTED_PREFERENCES = Arrays.asList(
+        Preference.ONLY_NODES,
+        Preference.PREFER_NODES
+    );
+
     private volatile List<String> awarenessAttributes;
     private volatile boolean useAdaptiveReplicaSelection;
     private volatile boolean ignoreAwarenessAttr;
     private volatile double weightedRoutingDefaultWeight;
+    private volatile boolean isFailOpenEnabled;
+    private volatile boolean isStrictWeightedShardRouting;
+    private volatile boolean ignoreWeightedRouting;
+    private final boolean isReaderWriterSplitEnabled;
 
     public OperationRouting(Settings settings, ClusterSettings clusterSettings) {
         // whether to ignore awareness attributes when routing requests
@@ -98,9 +137,16 @@ public class OperationRouting {
         );
         this.useAdaptiveReplicaSelection = USE_ADAPTIVE_REPLICA_SELECTION_SETTING.get(settings);
         this.weightedRoutingDefaultWeight = WEIGHTED_ROUTING_DEFAULT_WEIGHT.get(settings);
+        this.isFailOpenEnabled = WEIGHTED_ROUTING_FAILOPEN_ENABLED.get(settings);
+        this.isStrictWeightedShardRouting = STRICT_WEIGHTED_SHARD_ROUTING_ENABLED.get(settings);
+        this.ignoreWeightedRouting = IGNORE_WEIGHTED_SHARD_ROUTING.get(settings);
         clusterSettings.addSettingsUpdateConsumer(USE_ADAPTIVE_REPLICA_SELECTION_SETTING, this::setUseAdaptiveReplicaSelection);
         clusterSettings.addSettingsUpdateConsumer(IGNORE_AWARENESS_ATTRIBUTES_SETTING, this::setIgnoreAwarenessAttributes);
         clusterSettings.addSettingsUpdateConsumer(WEIGHTED_ROUTING_DEFAULT_WEIGHT, this::setWeightedRoutingDefaultWeight);
+        clusterSettings.addSettingsUpdateConsumer(WEIGHTED_ROUTING_FAILOPEN_ENABLED, this::setFailOpenEnabled);
+        clusterSettings.addSettingsUpdateConsumer(STRICT_WEIGHTED_SHARD_ROUTING_ENABLED, this::setStrictWeightedShardRouting);
+        clusterSettings.addSettingsUpdateConsumer(IGNORE_WEIGHTED_SHARD_ROUTING, this::setIgnoreWeightedRouting);
+        this.isReaderWriterSplitEnabled = FeatureFlags.READER_WRITER_SPLIT_EXPERIMENTAL_SETTING.get(settings);
     }
 
     void setUseAdaptiveReplicaSelection(boolean useAdaptiveReplicaSelection) {
@@ -113,6 +159,18 @@ public class OperationRouting {
 
     void setWeightedRoutingDefaultWeight(double weightedRoutingDefaultWeight) {
         this.weightedRoutingDefaultWeight = weightedRoutingDefaultWeight;
+    }
+
+    void setFailOpenEnabled(boolean isFailOpenEnabled) {
+        this.isFailOpenEnabled = isFailOpenEnabled;
+    }
+
+    void setStrictWeightedShardRouting(boolean strictWeightedShardRouting) {
+        this.isStrictWeightedShardRouting = strictWeightedShardRouting;
+    }
+
+    void setIgnoreWeightedRouting(boolean isWeightedRoundRobinEnabled) {
+        this.ignoreWeightedRouting = isWeightedRoundRobinEnabled;
     }
 
     public boolean isIgnoreAwarenessAttr() {
@@ -176,7 +234,7 @@ public class OperationRouting {
         @Nullable Map<String, Set<String>> routing,
         @Nullable String preference
     ) {
-        return searchShards(clusterState, concreteIndices, routing, preference, null, null);
+        return searchShards(clusterState, concreteIndices, routing, preference, null, null, null);
     }
 
     public GroupShardsIterator<ShardIterator> searchShards(
@@ -185,11 +243,34 @@ public class OperationRouting {
         @Nullable Map<String, Set<String>> routing,
         @Nullable String preference,
         @Nullable ResponseCollectorService collectorService,
-        @Nullable Map<String, Long> nodeCounts
+        @Nullable Map<String, Long> nodeCounts,
+        @Nullable SliceBuilder slice
     ) {
         final Set<IndexShardRoutingTable> shards = computeTargetedShards(clusterState, concreteIndices, routing);
-        final Set<ShardIterator> set = new HashSet<>(shards.size());
+
+        Map<Index, List<ShardIterator>> shardIterators = new HashMap<>();
         for (IndexShardRoutingTable shard : shards) {
+
+            IndexMetadata indexMetadataForShard = indexMetadata(clusterState, shard.shardId.getIndex().getName());
+            if (indexMetadataForShard.isRemoteSnapshot() && (preference == null || preference.isEmpty())) {
+                preference = Preference.PRIMARY.type();
+            }
+
+            if (FeatureFlags.isEnabled(FeatureFlags.TIERED_REMOTE_INDEX)
+                && IndexModule.DataLocalityType.PARTIAL.name()
+                    .equals(indexMetadataForShard.getSettings().get(IndexModule.INDEX_STORE_LOCALITY_SETTING.getKey()))
+                && (preference == null || preference.isEmpty())) {
+                preference = Preference.PRIMARY_FIRST.type();
+            }
+
+            if (isReaderWriterSplitEnabled) {
+                if (preference == null || preference.isEmpty()) {
+                    if (indexMetadataForShard.getNumberOfSearchOnlyReplicas() > 0) {
+                        preference = Preference.SEARCH_REPLICA.type();
+                    }
+                }
+            }
+
             ShardIterator iterator = preferenceActiveShardIterator(
                 shard,
                 clusterState.nodes().getLocalNodeId(),
@@ -200,10 +281,31 @@ public class OperationRouting {
                 clusterState.metadata().weightedRoutingMetadata()
             );
             if (iterator != null) {
-                set.add(iterator);
+                shardIterators.computeIfAbsent(iterator.shardId().getIndex(), k -> new ArrayList<>()).add(iterator);
             }
         }
-        return GroupShardsIterator.sortAndCreate(new ArrayList<>(set));
+        List<ShardIterator> allShardIterators = new ArrayList<>();
+        if (slice != null) {
+            for (List<ShardIterator> indexIterators : shardIterators.values()) {
+                // Filter the returned shards for the given slice
+                CollectionUtil.timSort(indexIterators);
+                // We use the ordinal of the iterator in the group (after sorting) rather than the shard id, because
+                // computeTargetedShards may return a subset of shards for an index, if a routing parameter was
+                // specified. In that case, the set of routable shards is considered the full universe of available
+                // shards for each index, when mapping shards to slices. If no routing parameter was specified,
+                // then ordinals and shard IDs are the same. This mimics the logic in
+                // org.opensearch.search.slice.SliceBuilder.toFilter.
+                for (int i = 0; i < indexIterators.size(); i++) {
+                    if (slice.shardMatches(i, indexIterators.size())) {
+                        allShardIterators.add(indexIterators.get(i));
+                    }
+                }
+            }
+        } else {
+            shardIterators.values().forEach(allShardIterators::addAll);
+        }
+
+        return GroupShardsIterator.sortAndCreate(allShardIterators);
     }
 
     public static ShardIterator getShards(ClusterState clusterState, ShardId shardId) {
@@ -237,6 +339,7 @@ public class OperationRouting {
                     set.add(indexShard);
                 }
             }
+
         }
         return set;
     }
@@ -253,6 +356,7 @@ public class OperationRouting {
         if (preference == null || preference.isEmpty()) {
             return shardRoutings(indexShard, nodes, collectorService, nodeCounts, weightedRoutingMetadata);
         }
+
         if (preference.charAt(0) == '_') {
             Preference preferenceType = Preference.parse(preference);
             if (preferenceType == Preference.SHARDS) {
@@ -285,6 +389,7 @@ public class OperationRouting {
                 }
             }
             preferenceType = Preference.parse(preference);
+            checkPreferenceBasedRoutingAllowed(preferenceType, weightedRoutingMetadata);
             switch (preferenceType) {
                 case PREFER_NODES:
                     final Set<String> nodesIds = Arrays.stream(preference.substring(Preference.PREFER_NODES.type().length() + 1).split(","))
@@ -292,6 +397,16 @@ public class OperationRouting {
                     return indexShard.preferNodeActiveInitializingShardsIt(nodesIds);
                 case LOCAL:
                     return indexShard.preferNodeActiveInitializingShardsIt(Collections.singleton(localNodeId));
+                case PRIMARY:
+                    return indexShard.primaryActiveInitializingShardIt();
+                case REPLICA:
+                    return indexShard.replicaActiveInitializingShardIt();
+                case PRIMARY_FIRST:
+                    return indexShard.primaryFirstActiveInitializingShardsIt();
+                case REPLICA_FIRST:
+                    return indexShard.replicaFirstActiveInitializingShardsIt();
+                case SEARCH_REPLICA:
+                    return indexShard.searchReplicaActiveInitializingShardIt();
                 case ONLY_LOCAL:
                     return indexShard.onlyNodeActiveInitializingShardsIt(localNodeId);
                 case ONLY_NODES:
@@ -310,7 +425,19 @@ public class OperationRouting {
         // for a different element in the list by also incorporating the
         // shard ID into the hash of the user-supplied preference key.
         routingHash = 31 * routingHash + indexShard.shardId.hashCode();
-        if (ignoreAwarenessAttributes()) {
+        if (WeightedRoutingUtils.shouldPerformStrictWeightedRouting(
+            isStrictWeightedShardRouting,
+            ignoreWeightedRouting,
+            weightedRoutingMetadata
+        )) {
+            return indexShard.activeInitializingShardsWeightedIt(
+                weightedRoutingMetadata.getWeightedRouting(),
+                nodes,
+                getWeightedRoutingDefaultWeight(),
+                isFailOpenEnabled,
+                routingHash
+            );
+        } else if (ignoreAwarenessAttributes()) {
             return indexShard.activeInitializingShardsIt(routingHash);
         } else {
             return indexShard.preferAttributesActiveInitializingShardsIt(awarenessAttributes, nodes, routingHash);
@@ -324,11 +451,13 @@ public class OperationRouting {
         @Nullable Map<String, Long> nodeCounts,
         @Nullable WeightedRoutingMetadata weightedRoutingMetadata
     ) {
-        if (weightedRoutingMetadata != null && weightedRoutingMetadata.getWeightedRouting().isSet()) {
+        if (WeightedRoutingUtils.shouldPerformWeightedRouting(ignoreWeightedRouting, weightedRoutingMetadata)) {
             return indexShard.activeInitializingShardsWeightedIt(
                 weightedRoutingMetadata.getWeightedRouting(),
                 nodes,
-                getWeightedRoutingDefaultWeight()
+                getWeightedRoutingDefaultWeight(),
+                isFailOpenEnabled,
+                null
             );
         } else if (ignoreAwarenessAttributes()) {
             if (useAdaptiveReplicaSelection) {
@@ -396,4 +525,15 @@ public class OperationRouting {
         return Math.floorMod(hash, indexMetadata.getRoutingNumShards()) / indexMetadata.getRoutingFactor();
     }
 
+    private void checkPreferenceBasedRoutingAllowed(Preference preference, @Nullable WeightedRoutingMetadata weightedRoutingMetadata) {
+        if (WeightedRoutingUtils.shouldPerformStrictWeightedRouting(
+            isStrictWeightedShardRouting,
+            ignoreWeightedRouting,
+            weightedRoutingMetadata
+        ) && WEIGHTED_ROUTING_RESTRICTED_PREFERENCES.contains(preference)) {
+            throw new PreferenceBasedSearchNotAllowedException(
+                "Preference type based routing not allowed with strict weighted shard routing enabled"
+            );
+        }
+    }
 }

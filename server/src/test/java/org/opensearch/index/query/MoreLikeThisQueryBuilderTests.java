@@ -45,17 +45,16 @@ import org.opensearch.action.termvectors.MultiTermVectorsResponse;
 import org.opensearch.action.termvectors.TermVectorsRequest;
 import org.opensearch.action.termvectors.TermVectorsResponse;
 import org.opensearch.cluster.metadata.IndexMetadata;
-import org.opensearch.common.Strings;
-import org.opensearch.common.bytes.BytesReference;
 import org.opensearch.common.io.stream.BytesStreamOutput;
 import org.opensearch.common.lucene.search.MoreLikeThisQuery;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.util.CollectionUtils;
-import org.opensearch.common.xcontent.ToXContent;
-import org.opensearch.common.xcontent.XContentBuilder;
 import org.opensearch.common.xcontent.XContentFactory;
-import org.opensearch.common.xcontent.XContentParser;
 import org.opensearch.common.xcontent.json.JsonXContent;
+import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.common.util.CollectionUtils;
+import org.opensearch.core.xcontent.ToXContent;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.VersionType;
 import org.opensearch.index.query.MoreLikeThisQueryBuilder.Item;
 import org.opensearch.test.AbstractQueryTestCase;
@@ -268,7 +267,7 @@ public class MoreLikeThisQueryBuilderTests extends AbstractQueryTestCase<MoreLik
         for (String fieldName : fieldNames) {
             index.addField(fieldName, text, new WhitespaceAnalyzer());
         }
-        return index.createSearcher().getIndexReader().getTermVectors(0);
+        return index.createSearcher().getIndexReader().termVectors().get(0);
     }
 
     @Override
@@ -277,8 +276,8 @@ public class MoreLikeThisQueryBuilderTests extends AbstractQueryTestCase<MoreLik
             assertThat(query, instanceOf(BooleanQuery.class));
             BooleanQuery booleanQuery = (BooleanQuery) query;
             for (BooleanClause booleanClause : booleanQuery) {
-                if (booleanClause.getQuery() instanceof MoreLikeThisQuery) {
-                    MoreLikeThisQuery moreLikeThisQuery = (MoreLikeThisQuery) booleanClause.getQuery();
+                if (booleanClause.query() instanceof MoreLikeThisQuery) {
+                    MoreLikeThisQuery moreLikeThisQuery = (MoreLikeThisQuery) booleanClause.query();
                     assertThat(moreLikeThisQuery.getLikeFields().length, greaterThan(0));
                 }
             }
@@ -394,7 +393,7 @@ public class MoreLikeThisQueryBuilderTests extends AbstractQueryTestCase<MoreLik
 
     public void testItemFromXContent() throws IOException {
         Item expectedItem = generateRandomItem();
-        String json = Strings.toString(expectedItem.toXContent(XContentFactory.jsonBuilder(), ToXContent.EMPTY_PARAMS));
+        String json = expectedItem.toXContent(XContentFactory.jsonBuilder(), ToXContent.EMPTY_PARAMS).toString();
         XContentParser parser = createParser(JsonXContent.jsonXContent, json);
         Item newItem = Item.parse(parser, new Item());
         assertEquals(expectedItem, newItem);

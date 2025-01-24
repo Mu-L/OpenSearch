@@ -8,16 +8,16 @@
 
 package org.opensearch.index.translog.listener;
 
-import org.opensearch.index.Index;
-import org.opensearch.index.shard.ShardId;
+import org.opensearch.core.index.Index;
+import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.test.OpenSearchTestCase;
 
 import java.lang.reflect.Proxy;
-import java.util.List;
-import java.util.Collections;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class TranslogListenerTests extends OpenSearchTestCase {
@@ -98,7 +98,9 @@ public class TranslogListenerTests extends OpenSearchTestCase {
         TranslogEventListener throwingListener = (TranslogEventListener) Proxy.newProxyInstance(
             TranslogEventListener.class.getClassLoader(),
             new Class[] { TranslogEventListener.class },
-            (a, b, c) -> { throw new RuntimeException(); }
+            (a, b, c) -> {
+                throw new RuntimeException();
+            }
         );
 
         final List<TranslogEventListener> translogEventListeners = new LinkedList<>(Arrays.asList(listener, throwingListener, listener));

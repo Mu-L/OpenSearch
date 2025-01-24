@@ -36,9 +36,9 @@ import org.opensearch.painless.spi.Allowlist;
 import org.opensearch.painless.spi.AllowlistClass;
 import org.opensearch.painless.spi.AllowlistLoader;
 import org.opensearch.painless.spi.AllowlistMethod;
+import org.opensearch.painless.spi.annotation.AllowlistAnnotationParser;
 import org.opensearch.painless.spi.annotation.DeprecatedAnnotation;
 import org.opensearch.painless.spi.annotation.NoImportAnnotation;
-import org.opensearch.painless.spi.annotation.AllowlistAnnotationParser;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -47,19 +47,15 @@ public class AllowlistLoaderTests extends ScriptTestCase {
     public void testUnknownAnnotations() {
         Map<String, AllowlistAnnotationParser> parsers = new HashMap<>(AllowlistAnnotationParser.BASE_ANNOTATION_PARSERS);
 
-        RuntimeException expected = expectThrows(
-            RuntimeException.class,
-            () -> { AllowlistLoader.loadFromResourceFiles(Allowlist.class, parsers, "org.opensearch.painless.annotation.unknown"); }
-        );
+        RuntimeException expected = expectThrows(RuntimeException.class, () -> {
+            AllowlistLoader.loadFromResourceFiles(Allowlist.class, parsers, "org.opensearch.painless.annotation.unknown");
+        });
         assertEquals("invalid annotation: parser not found for [unknownAnnotation] [@unknownAnnotation]", expected.getCause().getMessage());
         assertEquals(IllegalArgumentException.class, expected.getCause().getClass());
 
-        expected = expectThrows(
-            RuntimeException.class,
-            () -> {
-                AllowlistLoader.loadFromResourceFiles(Allowlist.class, parsers, "org.opensearch.painless.annotation.unknown_with_options");
-            }
-        );
+        expected = expectThrows(RuntimeException.class, () -> {
+            AllowlistLoader.loadFromResourceFiles(Allowlist.class, parsers, "org.opensearch.painless.annotation.unknown_with_options");
+        });
         assertEquals(
             "invalid annotation: parser not found for [unknownAnootationWithMessage] [@unknownAnootationWithMessage[arg=\"arg value\"]]",
             expected.getCause().getMessage()

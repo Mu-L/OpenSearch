@@ -32,20 +32,26 @@
 
 package org.opensearch.repositories.s3;
 
-import com.amazonaws.ClientConfiguration;
-import com.amazonaws.Protocol;
-import org.opensearch.common.Strings;
+import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
+import software.amazon.awssdk.auth.credentials.AwsCredentials;
+import software.amazon.awssdk.auth.credentials.AwsSessionCredentials;
+
+import org.opensearch.common.SuppressForbidden;
+import org.opensearch.common.io.PathUtils;
 import org.opensearch.common.logging.DeprecationLogger;
 import org.opensearch.common.settings.SecureSetting;
-import org.opensearch.common.settings.SecureString;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Setting.Property;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.settings.SettingsException;
 import org.opensearch.common.unit.TimeValue;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.settings.SecureString;
+import org.opensearch.repositories.s3.utils.Protocol;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.nio.file.Path;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Locale;
@@ -164,21 +170,69 @@ final class S3ClientSettings {
     static final Setting.AffixSetting<TimeValue> READ_TIMEOUT_SETTING = Setting.affixKeySetting(
         PREFIX,
         "read_timeout",
-        key -> Setting.timeSetting(key, TimeValue.timeValueMillis(ClientConfiguration.DEFAULT_SOCKET_TIMEOUT), Property.NodeScope)
+        key -> Setting.timeSetting(key, TimeValue.timeValueMillis(50_000), Property.NodeScope)
+    );
+
+    /** The request timeout for connecting to s3. */
+    static final Setting.AffixSetting<TimeValue> REQUEST_TIMEOUT_SETTING = Setting.affixKeySetting(
+        PREFIX,
+        "request_timeout",
+        key -> Setting.timeSetting(key, TimeValue.timeValueMinutes(5), Property.NodeScope)
+    );
+
+    /** The connection timeout for connecting to s3. */
+    static final Setting.AffixSetting<TimeValue> CONNECTION_TIMEOUT_SETTING = Setting.affixKeySetting(
+        PREFIX,
+        "connection_timeout",
+        key -> Setting.timeSetting(key, TimeValue.timeValueSeconds(10), Property.NodeScope)
+    );
+
+    /** The connection TTL for connecting to s3. */
+    static final Setting.AffixSetting<TimeValue> CONNECTION_TTL_SETTING = Setting.affixKeySetting(
+        PREFIX,
+        "connection_ttl",
+        key -> Setting.timeSetting(key, TimeValue.timeValueMillis(5000), Property.NodeScope)
+    );
+
+    /** The maximum connections to s3. */
+    static final Setting.AffixSetting<Integer> MAX_CONNECTIONS_SETTING = Setting.affixKeySetting(
+        PREFIX,
+        "max_connections",
+        key -> Setting.intSetting(key, 500, Property.NodeScope)
+    );
+
+    static final Setting.AffixSetting<Integer> MAX_SYNC_CONNECTIONS_SETTING = Setting.affixKeySetting(
+        PREFIX,
+        "max_sync_connections",
+        key -> Setting.intSetting(key, 500, Property.NodeScope)
+    );
+
+    /** Connection acquisition timeout for new connections to S3. */
+    static final Setting.AffixSetting<TimeValue> CONNECTION_ACQUISITION_TIMEOUT = Setting.affixKeySetting(
+        PREFIX,
+        "connection_acquisition_timeout",
+        key -> Setting.timeSetting(key, TimeValue.timeValueMinutes(15), Property.NodeScope)
+    );
+
+    /** The maximum pending connections to S3. */
+    static final Setting.AffixSetting<Integer> MAX_PENDING_CONNECTION_ACQUIRES = Setting.affixKeySetting(
+        PREFIX,
+        "max_pending_connection_acquires",
+        key -> Setting.intSetting(key, 10_000, Property.NodeScope)
     );
 
     /** The number of retries to use when an s3 request fails. */
     static final Setting.AffixSetting<Integer> MAX_RETRIES_SETTING = Setting.affixKeySetting(
         PREFIX,
         "max_retries",
-        key -> Setting.intSetting(key, ClientConfiguration.DEFAULT_RETRY_POLICY.getMaxErrorRetry(), 0, Property.NodeScope)
+        key -> Setting.intSetting(key, 3, 0, Property.NodeScope)
     );
 
     /** Whether retries should be throttled (ie use backoff). */
     static final Setting.AffixSetting<Boolean> USE_THROTTLE_RETRIES_SETTING = Setting.affixKeySetting(
         PREFIX,
         "use_throttle_retries",
-        key -> Setting.boolSetting(key, ClientConfiguration.DEFAULT_THROTTLE_RETRIES, Property.NodeScope)
+        key -> Setting.boolSetting(key, true, Property.NodeScope)
     );
 
     /** Whether the s3 client should use path style access. */
@@ -210,7 +264,7 @@ final class S3ClientSettings {
     );
 
     /** Credentials to authenticate with s3. */
-    final S3BasicCredentials credentials;
+    final AwsCredentials credentials;
 
     /** Credentials to authenticate with s3 using IAM Roles for Service Accounts (IRSA). */
     final IrsaCredentials irsaCredentials;
@@ -226,6 +280,24 @@ final class S3ClientSettings {
 
     /** The read timeout for the s3 client. */
     final int readTimeoutMillis;
+
+    /** The request timeout for the s3 client */
+    final int requestTimeoutMillis;
+
+    /** The connection timeout for the s3 client */
+    final int connectionTimeoutMillis;
+
+    /** The connection TTL for the s3 client */
+    final int connectionTTLMillis;
+
+    /** The max number of connections for the s3 async client */
+    final int maxConnections;
+
+    /** The max number of connections for the s3 sync client */
+    final int maxSyncConnections;
+
+    /** The connnection acquisition timeout for the s3 sync and async client */
+    final int connectionAcquisitionTimeoutMillis;
 
     /** The number of retries to use for the s3 client. */
     final int maxRetries;
@@ -246,11 +318,17 @@ final class S3ClientSettings {
     final String signerOverride;
 
     private S3ClientSettings(
-        S3BasicCredentials credentials,
+        AwsCredentials credentials,
         IrsaCredentials irsaCredentials,
         String endpoint,
         Protocol protocol,
         int readTimeoutMillis,
+        int requestTimeoutMillis,
+        int connectionTimeoutMillis,
+        int connectionTTLMillis,
+        int maxConnections,
+        int maxSyncConnections,
+        int connectionAcquisitionTimeoutMillis,
         int maxRetries,
         boolean throttleRetries,
         boolean pathStyleAccess,
@@ -264,6 +342,12 @@ final class S3ClientSettings {
         this.endpoint = endpoint;
         this.protocol = protocol;
         this.readTimeoutMillis = readTimeoutMillis;
+        this.requestTimeoutMillis = requestTimeoutMillis;
+        this.connectionTimeoutMillis = connectionTimeoutMillis;
+        this.connectionTTLMillis = connectionTTLMillis;
+        this.maxConnections = maxConnections;
+        this.maxSyncConnections = maxSyncConnections;
+        this.connectionAcquisitionTimeoutMillis = connectionAcquisitionTimeoutMillis;
         this.maxRetries = maxRetries;
         this.throttleRetries = throttleRetries;
         this.pathStyleAccess = pathStyleAccess;
@@ -295,6 +379,27 @@ final class S3ClientSettings {
         final int newReadTimeoutMillis = Math.toIntExact(
             getRepoSettingOrDefault(READ_TIMEOUT_SETTING, normalizedSettings, TimeValue.timeValueMillis(readTimeoutMillis)).millis()
         );
+        final int newRequestTimeoutMillis = Math.toIntExact(
+            getRepoSettingOrDefault(REQUEST_TIMEOUT_SETTING, normalizedSettings, TimeValue.timeValueMillis(requestTimeoutMillis)).millis()
+        );
+        final int newConnectionTimeoutMillis = Math.toIntExact(
+            getRepoSettingOrDefault(CONNECTION_TIMEOUT_SETTING, normalizedSettings, TimeValue.timeValueMillis(connectionTimeoutMillis))
+                .millis()
+        );
+        final int newConnectionTTLMillis = Math.toIntExact(
+            getRepoSettingOrDefault(CONNECTION_TTL_SETTING, normalizedSettings, TimeValue.timeValueMillis(connectionTTLMillis)).millis()
+        );
+        final int newConnectionAcquisitionTimeoutMillis = Math.toIntExact(
+            getRepoSettingOrDefault(
+                CONNECTION_ACQUISITION_TIMEOUT,
+                normalizedSettings,
+                TimeValue.timeValueMillis(connectionAcquisitionTimeoutMillis)
+            ).millis()
+        );
+        final int newMaxConnections = Math.toIntExact(getRepoSettingOrDefault(MAX_CONNECTIONS_SETTING, normalizedSettings, maxConnections));
+        final int newMaxSyncConnections = Math.toIntExact(
+            getRepoSettingOrDefault(MAX_SYNC_CONNECTIONS_SETTING, normalizedSettings, maxConnections)
+        );
         final int newMaxRetries = getRepoSettingOrDefault(MAX_RETRIES_SETTING, normalizedSettings, maxRetries);
         final boolean newThrottleRetries = getRepoSettingOrDefault(USE_THROTTLE_RETRIES_SETTING, normalizedSettings, throttleRetries);
         final boolean newPathStyleAccess = getRepoSettingOrDefault(USE_PATH_STYLE_ACCESS, normalizedSettings, pathStyleAccess);
@@ -303,7 +408,7 @@ final class S3ClientSettings {
             normalizedSettings,
             disableChunkedEncoding
         );
-        final S3BasicCredentials newCredentials;
+        final AwsCredentials newCredentials;
         if (checkDeprecatedCredentials(repositorySettings)) {
             newCredentials = loadDeprecatedCredentials(repositorySettings);
         } else {
@@ -316,6 +421,11 @@ final class S3ClientSettings {
             && Objects.equals(proxySettings.getHostName(), newProxyHost)
             && proxySettings.getPort() == newProxyPort
             && newReadTimeoutMillis == readTimeoutMillis
+            && newRequestTimeoutMillis == requestTimeoutMillis
+            && newConnectionTimeoutMillis == connectionTimeoutMillis
+            && newConnectionTTLMillis == connectionTTLMillis
+            && newMaxConnections == maxConnections
+            && newConnectionAcquisitionTimeoutMillis == connectionAcquisitionTimeoutMillis
             && maxRetries == newMaxRetries
             && newThrottleRetries == throttleRetries
             && Objects.equals(credentials, newCredentials)
@@ -333,6 +443,12 @@ final class S3ClientSettings {
             newEndpoint,
             newProtocol,
             newReadTimeoutMillis,
+            newRequestTimeoutMillis,
+            newConnectionTimeoutMillis,
+            newConnectionTTLMillis,
+            newMaxConnections,
+            newMaxSyncConnections,
+            newConnectionAcquisitionTimeoutMillis,
             newMaxRetries,
             newThrottleRetries,
             newPathStyleAccess,
@@ -345,19 +461,19 @@ final class S3ClientSettings {
 
     /**
      * Load all client settings from the given settings.
-     *
+     * <p>
      * Note this will always at least return a client named "default".
      */
-    static Map<String, S3ClientSettings> load(Settings settings) {
+    static Map<String, S3ClientSettings> load(final Settings settings, final Path configPath) {
         final Set<String> clientNames = settings.getGroups(PREFIX).keySet();
         final Map<String, S3ClientSettings> clients = new HashMap<>();
         for (final String clientName : clientNames) {
-            clients.put(clientName, getClientSettings(settings, clientName));
+            clients.put(clientName, getClientSettings(settings, clientName, configPath));
         }
         if (clients.containsKey("default") == false) {
             // this won't find any settings under the default client,
             // but it will pull all the fallback static settings
-            clients.put("default", getClientSettings(settings, "default"));
+            clients.put("default", getClientSettings(settings, "default", configPath));
         }
         return Collections.unmodifiableMap(clients);
     }
@@ -387,17 +503,17 @@ final class S3ClientSettings {
     }
 
     // backcompat for reading keys out of repository settings (clusterState)
-    private static S3BasicCredentials loadDeprecatedCredentials(Settings repositorySettings) {
+    private static AwsCredentials loadDeprecatedCredentials(Settings repositorySettings) {
         assert checkDeprecatedCredentials(repositorySettings);
         try (
             SecureString key = S3Repository.ACCESS_KEY_SETTING.get(repositorySettings);
             SecureString secret = S3Repository.SECRET_KEY_SETTING.get(repositorySettings)
         ) {
-            return new S3BasicCredentials(key.toString(), secret.toString());
+            return AwsBasicCredentials.create(key.toString(), secret.toString());
         }
     }
 
-    private static S3BasicCredentials loadCredentials(Settings settings, String clientName) {
+    private static AwsCredentials loadCredentials(Settings settings, String clientName) {
         try (
             SecureString accessKey = getConfigValue(settings, clientName, ACCESS_KEY_SETTING);
             SecureString secretKey = getConfigValue(settings, clientName, SECRET_KEY_SETTING);
@@ -406,9 +522,9 @@ final class S3ClientSettings {
             if (accessKey.length() != 0) {
                 if (secretKey.length() != 0) {
                     if (sessionToken.length() != 0) {
-                        return new S3BasicSessionCredentials(accessKey.toString(), secretKey.toString(), sessionToken.toString());
+                        return AwsSessionCredentials.create(accessKey.toString(), secretKey.toString(), sessionToken.toString());
                     } else {
-                        return new S3BasicCredentials(accessKey.toString(), secretKey.toString());
+                        return AwsBasicCredentials.create(accessKey.toString(), secretKey.toString());
                     }
                 } else {
                     throw new IllegalArgumentException("Missing secret key for s3 client [" + clientName + "]");
@@ -425,8 +541,17 @@ final class S3ClientSettings {
         }
     }
 
-    private static IrsaCredentials loadIrsaCredentials(Settings settings, String clientName) {
+    @SuppressForbidden(reason = "PathUtils#get")
+    private static IrsaCredentials loadIrsaCredentials(Settings settings, String clientName, Path configPath) {
         String identityTokenFile = getConfigValue(settings, clientName, IDENTITY_TOKEN_FILE_SETTING);
+        if (identityTokenFile.length() != 0) {
+            final Path identityTokenFilePath = PathUtils.get(identityTokenFile);
+            // If the path is not absolute, resolve it relatively to config path
+            if (!identityTokenFilePath.isAbsolute()) {
+                identityTokenFile = PathUtils.get(new Path[] { configPath }, identityTokenFile).toString();
+            }
+        }
+
         try (
             SecureString roleArn = getConfigValue(settings, clientName, ROLE_ARN_SETTING);
             SecureString roleSessionName = getConfigValue(settings, clientName, ROLE_SESSION_NAME_SETTING)
@@ -441,14 +566,20 @@ final class S3ClientSettings {
 
     // pkg private for tests
     /** Parse settings for a single client. */
-    static S3ClientSettings getClientSettings(final Settings settings, final String clientName) {
+    static S3ClientSettings getClientSettings(final Settings settings, final String clientName, final Path configPath) {
         final Protocol awsProtocol = getConfigValue(settings, clientName, PROTOCOL_SETTING);
         return new S3ClientSettings(
             S3ClientSettings.loadCredentials(settings, clientName),
-            S3ClientSettings.loadIrsaCredentials(settings, clientName),
+            S3ClientSettings.loadIrsaCredentials(settings, clientName, configPath),
             getConfigValue(settings, clientName, ENDPOINT_SETTING),
             awsProtocol,
             Math.toIntExact(getConfigValue(settings, clientName, READ_TIMEOUT_SETTING).millis()),
+            Math.toIntExact(getConfigValue(settings, clientName, REQUEST_TIMEOUT_SETTING).millis()),
+            Math.toIntExact(getConfigValue(settings, clientName, CONNECTION_TIMEOUT_SETTING).millis()),
+            Math.toIntExact(getConfigValue(settings, clientName, CONNECTION_TTL_SETTING).millis()),
+            Math.toIntExact(getConfigValue(settings, clientName, MAX_CONNECTIONS_SETTING)),
+            Math.toIntExact(getConfigValue(settings, clientName, MAX_SYNC_CONNECTIONS_SETTING)),
+            Math.toIntExact(getConfigValue(settings, clientName, CONNECTION_ACQUISITION_TIMEOUT).millis()),
             getConfigValue(settings, clientName, MAX_RETRIES_SETTING),
             getConfigValue(settings, clientName, USE_THROTTLE_RETRIES_SETTING),
             getConfigValue(settings, clientName, USE_PATH_STYLE_ACCESS),
@@ -518,6 +649,11 @@ final class S3ClientSettings {
         }
         final S3ClientSettings that = (S3ClientSettings) o;
         return readTimeoutMillis == that.readTimeoutMillis
+            && requestTimeoutMillis == that.requestTimeoutMillis
+            && connectionTimeoutMillis == that.connectionTimeoutMillis
+            && connectionTTLMillis == that.connectionTTLMillis
+            && maxConnections == that.maxConnections
+            && connectionAcquisitionTimeoutMillis == that.connectionAcquisitionTimeoutMillis
             && maxRetries == that.maxRetries
             && throttleRetries == that.throttleRetries
             && Objects.equals(credentials, that.credentials)
@@ -538,6 +674,11 @@ final class S3ClientSettings {
             protocol,
             proxySettings,
             readTimeoutMillis,
+            requestTimeoutMillis,
+            connectionTimeoutMillis,
+            connectionTTLMillis,
+            maxConnections,
+            connectionAcquisitionTimeoutMillis,
             maxRetries,
             throttleRetries,
             disableChunkedEncoding,

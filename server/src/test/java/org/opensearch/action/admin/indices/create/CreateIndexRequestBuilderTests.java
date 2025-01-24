@@ -34,9 +34,9 @@ package org.opensearch.action.admin.indices.create;
 
 import org.opensearch.OpenSearchParseException;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.xcontent.XContentBuilder;
 import org.opensearch.common.xcontent.XContentFactory;
-import org.opensearch.common.xcontent.XContentType;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.test.OpenSearchTestCase;
 import org.opensearch.test.client.NoOpClient;
 import org.junit.After;
@@ -74,13 +74,12 @@ public class CreateIndexRequestBuilderTests extends OpenSearchTestCase {
     public void testSetSource() throws IOException {
         CreateIndexRequestBuilder builder = new CreateIndexRequestBuilder(this.testClient, CreateIndexAction.INSTANCE);
 
-        OpenSearchParseException e = expectThrows(
-            OpenSearchParseException.class,
-            () -> { builder.setSource("{\"" + KEY + "\" : \"" + VALUE + "\"}", XContentType.JSON); }
-        );
+        OpenSearchParseException e = expectThrows(OpenSearchParseException.class, () -> {
+            builder.setSource("{\"" + KEY + "\" : \"" + VALUE + "\"}", MediaTypeRegistry.JSON);
+        });
         assertEquals(String.format(Locale.ROOT, "unknown key [%s] for create index", KEY), e.getMessage());
 
-        builder.setSource("{\"settings\" : {\"" + KEY + "\" : \"" + VALUE + "\"}}", XContentType.JSON);
+        builder.setSource("{\"settings\" : {\"" + KEY + "\" : \"" + VALUE + "\"}}", MediaTypeRegistry.JSON);
         assertEquals(VALUE, builder.request().settings().get(KEY));
 
         XContentBuilder xContent = XContentFactory.jsonBuilder()
@@ -101,7 +100,7 @@ public class CreateIndexRequestBuilderTests extends OpenSearchTestCase {
             .endObject()
             .endObject();
         doc.close();
-        builder.setSource(docOut.toByteArray(), XContentType.JSON);
+        builder.setSource(docOut.toByteArray(), MediaTypeRegistry.JSON);
         assertEquals(VALUE, builder.request().settings().get(KEY));
 
         Map<String, String> settingsMap = new HashMap<>();
@@ -118,7 +117,7 @@ public class CreateIndexRequestBuilderTests extends OpenSearchTestCase {
         builder.setSettings(Settings.builder().put(KEY, VALUE));
         assertEquals(VALUE, builder.request().settings().get(KEY));
 
-        builder.setSettings("{\"" + KEY + "\" : \"" + VALUE + "\"}", XContentType.JSON);
+        builder.setSettings("{\"" + KEY + "\" : \"" + VALUE + "\"}", MediaTypeRegistry.JSON);
         assertEquals(VALUE, builder.request().settings().get(KEY));
 
         builder.setSettings(Settings.builder().put(KEY, VALUE));

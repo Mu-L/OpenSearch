@@ -32,22 +32,23 @@
 
 package org.opensearch.action.admin.cluster.stats;
 
-import com.carrotsearch.hppc.ObjectIntHashMap;
-import com.carrotsearch.hppc.cursors.ObjectIntCursor;
 import org.opensearch.Version;
 import org.opensearch.action.admin.cluster.node.info.NodeInfo;
 import org.opensearch.action.admin.cluster.node.info.PluginsAndModules;
 import org.opensearch.action.admin.cluster.node.stats.NodeStats;
+import org.opensearch.action.admin.cluster.stats.ClusterStatsRequest.Metric;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.node.DiscoveryNodeRole;
-import org.opensearch.common.Strings;
+import org.opensearch.common.annotation.PublicApi;
+import org.opensearch.common.metrics.OperationStats;
 import org.opensearch.common.network.NetworkModule;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.transport.TransportAddress;
-import org.opensearch.common.unit.ByteSizeValue;
 import org.opensearch.common.unit.TimeValue;
-import org.opensearch.common.xcontent.ToXContentFragment;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.transport.TransportAddress;
+import org.opensearch.core.common.unit.ByteSizeValue;
+import org.opensearch.core.xcontent.ToXContentFragment;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.discovery.DiscoveryModule;
 import org.opensearch.monitor.fs.FsInfo;
 import org.opensearch.monitor.jvm.JvmInfo;
@@ -72,8 +73,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Per Node Cluster Stats
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class ClusterStatsNodes implements ToXContentFragment {
 
     private final Counts counts;
@@ -88,10 +90,29 @@ public class ClusterStatsNodes implements ToXContentFragment {
     private final PackagingTypes packagingTypes;
     private final IngestStats ingestStats;
 
+    public static final Set<Metric> NODE_STATS_METRICS = Set.of(
+        // Stats computed from node info and node stat
+        Metric.OS,
+        Metric.JVM,
+        // Stats computed from node stat
+        Metric.FS,
+        Metric.PROCESS,
+        Metric.INGEST,
+        // Stats computed from node info
+        Metric.PLUGINS,
+        Metric.NETWORK_TYPES,
+        Metric.DISCOVERY_TYPES,
+        Metric.PACKAGING_TYPES
+    );
+
     ClusterStatsNodes(List<ClusterStatsNodeResponse> nodeResponses) {
+        this(Set.of(Metric.values()), nodeResponses);
+    }
+
+    ClusterStatsNodes(Set<Metric> requestedMetrics, List<ClusterStatsNodeResponse> nodeResponses) {
         this.versions = new HashSet<>();
-        this.fs = new FsInfo.Path();
-        this.plugins = new HashSet<>();
+        this.fs = requestedMetrics.contains(ClusterStatsRequest.Metric.FS) ? new FsInfo.Path() : null;
+        this.plugins = requestedMetrics.contains(ClusterStatsRequest.Metric.PLUGINS) ? new HashSet<>() : null;
 
         Set<InetAddress> seenAddresses = new HashSet<>(nodeResponses.size());
         List<NodeInfo> nodeInfos = new ArrayList<>(nodeResponses.size());
@@ -100,7 +121,9 @@ public class ClusterStatsNodes implements ToXContentFragment {
             nodeInfos.add(nodeResponse.nodeInfo());
             nodeStats.add(nodeResponse.nodeStats());
             this.versions.add(nodeResponse.nodeInfo().getVersion());
-            this.plugins.addAll(nodeResponse.nodeInfo().getInfo(PluginsAndModules.class).getPluginInfos());
+            if (requestedMetrics.contains(ClusterStatsRequest.Metric.PLUGINS)) {
+                this.plugins.addAll(nodeResponse.nodeInfo().getInfo(PluginsAndModules.class).getPluginInfos());
+            }
 
             // now do the stats that should be deduped by hardware (implemented by ip deduping)
             TransportAddress publishAddress = nodeResponse.nodeInfo().getInfo(TransportInfo.class).address().publishAddress();
@@ -108,18 +131,19 @@ public class ClusterStatsNodes implements ToXContentFragment {
             if (!seenAddresses.add(inetAddress)) {
                 continue;
             }
-            if (nodeResponse.nodeStats().getFs() != null) {
+            if (requestedMetrics.contains(ClusterStatsRequest.Metric.FS) && nodeResponse.nodeStats().getFs() != null) {
                 this.fs.add(nodeResponse.nodeStats().getFs().getTotal());
             }
         }
+
         this.counts = new Counts(nodeInfos);
-        this.os = new OsStats(nodeInfos, nodeStats);
-        this.process = new ProcessStats(nodeStats);
-        this.jvm = new JvmStats(nodeInfos, nodeStats);
-        this.networkTypes = new NetworkTypes(nodeInfos);
-        this.discoveryTypes = new DiscoveryTypes(nodeInfos);
-        this.packagingTypes = new PackagingTypes(nodeInfos);
-        this.ingestStats = new IngestStats(nodeStats);
+        this.networkTypes = requestedMetrics.contains(ClusterStatsRequest.Metric.NETWORK_TYPES) ? new NetworkTypes(nodeInfos) : null;
+        this.discoveryTypes = requestedMetrics.contains(ClusterStatsRequest.Metric.DISCOVERY_TYPES) ? new DiscoveryTypes(nodeInfos) : null;
+        this.packagingTypes = requestedMetrics.contains(ClusterStatsRequest.Metric.PACKAGING_TYPES) ? new PackagingTypes(nodeInfos) : null;
+        this.ingestStats = requestedMetrics.contains(ClusterStatsRequest.Metric.INGEST) ? new IngestStats(nodeStats) : null;
+        this.process = requestedMetrics.contains(ClusterStatsRequest.Metric.PROCESS) ? new ProcessStats(nodeStats) : null;
+        this.os = requestedMetrics.contains(ClusterStatsRequest.Metric.OS) ? new OsStats(nodeInfos, nodeStats) : null;
+        this.jvm = requestedMetrics.contains(ClusterStatsRequest.Metric.JVM) ? new JvmStats(nodeInfos, nodeStats) : null;
     }
 
     public Counts getCounts() {
@@ -178,36 +202,54 @@ public class ClusterStatsNodes implements ToXContentFragment {
         }
         builder.endArray();
 
-        builder.startObject(Fields.OS);
-        os.toXContent(builder, params);
-        builder.endObject();
-
-        builder.startObject(Fields.PROCESS);
-        process.toXContent(builder, params);
-        builder.endObject();
-
-        builder.startObject(Fields.JVM);
-        jvm.toXContent(builder, params);
-        builder.endObject();
-
-        builder.field(Fields.FS);
-        fs.toXContent(builder, params);
-
-        builder.startArray(Fields.PLUGINS);
-        for (PluginInfo pluginInfo : plugins) {
-            pluginInfo.toXContent(builder, params);
+        if (os != null) {
+            builder.startObject(Fields.OS);
+            os.toXContent(builder, params);
+            builder.endObject();
         }
-        builder.endArray();
 
-        builder.startObject(Fields.NETWORK_TYPES);
-        networkTypes.toXContent(builder, params);
-        builder.endObject();
+        if (process != null) {
+            builder.startObject(Fields.PROCESS);
+            process.toXContent(builder, params);
+            builder.endObject();
+        }
 
-        discoveryTypes.toXContent(builder, params);
+        if (jvm != null) {
+            builder.startObject(Fields.JVM);
+            jvm.toXContent(builder, params);
+            builder.endObject();
+        }
 
-        packagingTypes.toXContent(builder, params);
+        if (fs != null) {
+            builder.field(Fields.FS);
+            fs.toXContent(builder, params);
+        }
 
-        ingestStats.toXContent(builder, params);
+        if (plugins != null) {
+            builder.startArray(Fields.PLUGINS);
+            for (PluginInfo pluginInfo : plugins) {
+                pluginInfo.toXContent(builder, params);
+            }
+            builder.endArray();
+        }
+
+        if (networkTypes != null) {
+            builder.startObject(Fields.NETWORK_TYPES);
+            networkTypes.toXContent(builder, params);
+            builder.endObject();
+        }
+
+        if (discoveryTypes != null) {
+            discoveryTypes.toXContent(builder, params);
+        }
+
+        if (packagingTypes != null) {
+            packagingTypes.toXContent(builder, params);
+        }
+
+        if (ingestStats != null) {
+            ingestStats.toXContent(builder, params);
+        }
 
         return builder;
     }
@@ -215,8 +257,9 @@ public class ClusterStatsNodes implements ToXContentFragment {
     /**
      * Inner Counts
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     public static class Counts implements ToXContentFragment {
         static final String COORDINATING_ONLY = "coordinating_only";
 
@@ -283,21 +326,22 @@ public class ClusterStatsNodes implements ToXContentFragment {
     /**
      * Inner Operating System Stats
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     public static class OsStats implements ToXContentFragment {
         final int availableProcessors;
         final int allocatedProcessors;
-        final ObjectIntHashMap<String> names;
-        final ObjectIntHashMap<String> prettyNames;
+        final Map<String, Integer> names;
+        final Map<String, Integer> prettyNames;
         final org.opensearch.monitor.os.OsStats.Mem mem;
 
         /**
          * Build the stats from information about each node.
          */
         private OsStats(List<NodeInfo> nodeInfos, List<NodeStats> nodeStatsList) {
-            this.names = new ObjectIntHashMap<>();
-            this.prettyNames = new ObjectIntHashMap<>();
+            final Map<String, Integer> names = new HashMap<>(nodeInfos.size());
+            final Map<String, Integer> prettyNames = new HashMap<>(nodeInfos.size());
             int availableProcessors = 0;
             int allocatedProcessors = 0;
             for (NodeInfo nodeInfo : nodeInfos) {
@@ -305,12 +349,14 @@ public class ClusterStatsNodes implements ToXContentFragment {
                 allocatedProcessors += nodeInfo.getInfo(OsInfo.class).getAllocatedProcessors();
 
                 if (nodeInfo.getInfo(OsInfo.class).getName() != null) {
-                    names.addTo(nodeInfo.getInfo(OsInfo.class).getName(), 1);
+                    names.merge(nodeInfo.getInfo(OsInfo.class).getName(), 1, Integer::sum);
                 }
                 if (nodeInfo.getInfo(OsInfo.class).getPrettyName() != null) {
-                    prettyNames.addTo(nodeInfo.getInfo(OsInfo.class).getPrettyName(), 1);
+                    prettyNames.merge(nodeInfo.getInfo(OsInfo.class).getPrettyName(), 1, Integer::sum);
                 }
             }
+            this.names = Collections.unmodifiableMap(names);
+            this.prettyNames = Collections.unmodifiableMap(prettyNames);
             this.availableProcessors = availableProcessors;
             this.allocatedProcessors = allocatedProcessors;
 
@@ -364,11 +410,11 @@ public class ClusterStatsNodes implements ToXContentFragment {
             builder.field(Fields.ALLOCATED_PROCESSORS, allocatedProcessors);
             builder.startArray(Fields.NAMES);
             {
-                for (ObjectIntCursor<String> name : names) {
+                for (final Map.Entry<String, Integer> name : names.entrySet()) {
                     builder.startObject();
                     {
-                        builder.field(Fields.NAME, name.key);
-                        builder.field(Fields.COUNT, name.value);
+                        builder.field(Fields.NAME, name.getKey());
+                        builder.field(Fields.COUNT, name.getValue());
                     }
                     builder.endObject();
                 }
@@ -376,11 +422,11 @@ public class ClusterStatsNodes implements ToXContentFragment {
             builder.endArray();
             builder.startArray(Fields.PRETTY_NAMES);
             {
-                for (final ObjectIntCursor<String> prettyName : prettyNames) {
+                for (final Map.Entry<String, Integer> prettyName : prettyNames.entrySet()) {
                     builder.startObject();
                     {
-                        builder.field(Fields.PRETTY_NAME, prettyName.key);
-                        builder.field(Fields.COUNT, prettyName.value);
+                        builder.field(Fields.PRETTY_NAME, prettyName.getKey());
+                        builder.field(Fields.COUNT, prettyName.getValue());
                     }
                     builder.endObject();
                 }
@@ -394,8 +440,9 @@ public class ClusterStatsNodes implements ToXContentFragment {
     /**
      * Inner Process Stats
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     public static class ProcessStats implements ToXContentFragment {
 
         final int count;
@@ -497,11 +544,12 @@ public class ClusterStatsNodes implements ToXContentFragment {
     /**
      * Inner JVM Stats
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     public static class JvmStats implements ToXContentFragment {
 
-        private final ObjectIntHashMap<JvmVersion> versions;
+        private final Map<JvmVersion, Integer> versions;
         private final long threads;
         private final long maxUptime;
         private final long heapUsed;
@@ -511,15 +559,15 @@ public class ClusterStatsNodes implements ToXContentFragment {
          * Build from lists of information about each node.
          */
         private JvmStats(List<NodeInfo> nodeInfos, List<NodeStats> nodeStatsList) {
-            this.versions = new ObjectIntHashMap<>();
+            final Map<JvmVersion, Integer> versions = new HashMap<>(nodeInfos.size());
             long threads = 0;
             long maxUptime = 0;
             long heapMax = 0;
             long heapUsed = 0;
             for (NodeInfo nodeInfo : nodeInfos) {
-                versions.addTo(new JvmVersion(nodeInfo.getInfo(JvmInfo.class)), 1);
+                versions.merge(new JvmVersion(nodeInfo.getInfo(JvmInfo.class)), 1, Integer::sum);
             }
-
+            this.versions = Collections.unmodifiableMap(versions);
             for (NodeStats nodeStats : nodeStatsList) {
                 org.opensearch.monitor.jvm.JvmStats js = nodeStats.getJvm();
                 if (js == null) {
@@ -540,7 +588,7 @@ public class ClusterStatsNodes implements ToXContentFragment {
             this.heapMax = heapMax;
         }
 
-        public ObjectIntHashMap<JvmVersion> getVersions() {
+        public Map<JvmVersion, Integer> getVersions() {
             return versions;
         }
 
@@ -600,15 +648,15 @@ public class ClusterStatsNodes implements ToXContentFragment {
         public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
             builder.humanReadableField(Fields.MAX_UPTIME_IN_MILLIS, Fields.MAX_UPTIME, new TimeValue(maxUptime));
             builder.startArray(Fields.VERSIONS);
-            for (ObjectIntCursor<JvmVersion> v : versions) {
+            for (final Map.Entry<JvmVersion, Integer> v : versions.entrySet()) {
                 builder.startObject();
-                builder.field(Fields.VERSION, v.key.version);
-                builder.field(Fields.VM_NAME, v.key.vmName);
-                builder.field(Fields.VM_VERSION, v.key.vmVersion);
-                builder.field(Fields.VM_VENDOR, v.key.vmVendor);
-                builder.field(Fields.BUNDLED_JDK, v.key.bundledJdk);
-                builder.field(Fields.USING_BUNDLED_JDK, v.key.usingBundledJdk);
-                builder.field(Fields.COUNT, v.value);
+                builder.field(Fields.VERSION, v.getKey().version);
+                builder.field(Fields.VM_NAME, v.getKey().vmName);
+                builder.field(Fields.VM_VERSION, v.getKey().vmVersion);
+                builder.field(Fields.VM_VENDOR, v.getKey().vmVendor);
+                builder.field(Fields.BUNDLED_JDK, v.getKey().bundledJdk);
+                builder.field(Fields.USING_BUNDLED_JDK, v.getKey().usingBundledJdk);
+                builder.field(Fields.COUNT, v.getValue());
                 builder.endObject();
             }
             builder.endArray();
@@ -625,8 +673,9 @@ public class ClusterStatsNodes implements ToXContentFragment {
     /**
      * Inner JVM Version
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     public static class JvmVersion {
         String version;
         String vmName;
@@ -800,18 +849,18 @@ public class ClusterStatsNodes implements ToXContentFragment {
                         pipelineIds.add(processorStats.getKey());
                         for (org.opensearch.ingest.IngestStats.ProcessorStat stat : processorStats.getValue()) {
                             stats.compute(stat.getType(), (k, v) -> {
-                                org.opensearch.ingest.IngestStats.Stats nodeIngestStats = stat.getStats();
+                                OperationStats nodeIngestStats = stat.getStats();
                                 if (v == null) {
                                     return new long[] {
-                                        nodeIngestStats.getIngestCount(),
-                                        nodeIngestStats.getIngestFailedCount(),
-                                        nodeIngestStats.getIngestCurrent(),
-                                        nodeIngestStats.getIngestTimeInMillis() };
+                                        nodeIngestStats.getCount(),
+                                        nodeIngestStats.getFailedCount(),
+                                        nodeIngestStats.getCurrent(),
+                                        nodeIngestStats.getTotalTimeInMillis() };
                                 } else {
-                                    v[0] += nodeIngestStats.getIngestCount();
-                                    v[1] += nodeIngestStats.getIngestFailedCount();
-                                    v[2] += nodeIngestStats.getIngestCurrent();
-                                    v[3] += nodeIngestStats.getIngestTimeInMillis();
+                                    v[0] += nodeIngestStats.getCount();
+                                    v[1] += nodeIngestStats.getFailedCount();
+                                    v[2] += nodeIngestStats.getCurrent();
+                                    v[3] += nodeIngestStats.getTotalTimeInMillis();
                                     return v;
                                 }
                             });

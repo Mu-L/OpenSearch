@@ -42,7 +42,7 @@ import org.opensearch.action.admin.cluster.settings.ClusterGetSettingsRequest;
 import org.opensearch.action.admin.cluster.settings.ClusterGetSettingsResponse;
 import org.opensearch.action.admin.cluster.settings.ClusterUpdateSettingsRequest;
 import org.opensearch.action.admin.cluster.settings.ClusterUpdateSettingsResponse;
-import org.opensearch.action.support.master.AcknowledgedResponse;
+import org.opensearch.action.support.clustermanager.AcknowledgedResponse;
 import org.opensearch.client.cluster.RemoteConnectionInfo;
 import org.opensearch.client.cluster.RemoteInfoRequest;
 import org.opensearch.client.cluster.RemoteInfoResponse;
@@ -61,12 +61,12 @@ import org.opensearch.cluster.metadata.Template;
 import org.opensearch.cluster.routing.allocation.decider.EnableAllocationDecider;
 import org.opensearch.common.compress.CompressedXContent;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.unit.ByteSizeUnit;
 import org.opensearch.common.unit.TimeValue;
-import org.opensearch.common.xcontent.XContentType;
 import org.opensearch.common.xcontent.support.XContentMapValues;
+import org.opensearch.core.common.unit.ByteSizeUnit;
+import org.opensearch.core.rest.RestStatus;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
 import org.opensearch.indices.recovery.RecoverySettings;
-import org.opensearch.rest.RestStatus;
 import org.opensearch.transport.RemoteClusterService;
 import org.opensearch.transport.SniffConnectionStrategy;
 
@@ -125,7 +125,7 @@ public class ClusterClientIT extends OpenSearchRestHighLevelClientTestCase {
 
         ClusterUpdateSettingsRequest resetRequest = new ClusterUpdateSettingsRequest();
         resetRequest.transientSettings(Settings.builder().putNull(transientSettingKey));
-        resetRequest.persistentSettings("{\"" + persistentSettingKey + "\": null }", XContentType.JSON);
+        resetRequest.persistentSettings("{\"" + persistentSettingKey + "\": null }", MediaTypeRegistry.JSON);
 
         ClusterUpdateSettingsResponse resetResponse = execute(
             resetRequest,
@@ -162,7 +162,7 @@ public class ClusterClientIT extends OpenSearchRestHighLevelClientTestCase {
         assertThat(exception.status(), equalTo(RestStatus.BAD_REQUEST));
         assertThat(
             exception.getMessage(),
-            equalTo("OpenSearch exception [type=illegal_argument_exception, reason=transient setting [" + setting + "], not recognized]")
+            equalTo("OpenSearch exception [type=settings_exception, reason=transient setting [" + setting + "], not recognized]")
         );
     }
 

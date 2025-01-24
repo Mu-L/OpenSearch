@@ -31,9 +31,9 @@
 
 package org.opensearch.test.rest.yaml.section;
 
-import org.opensearch.common.ParsingException;
-import org.opensearch.common.xcontent.XContentLocation;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.common.ParsingException;
+import org.opensearch.core.xcontent.XContentLocation;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.test.rest.yaml.ClientYamlTestExecutionContext;
 
 import java.io.IOException;
@@ -42,7 +42,7 @@ import java.util.Map;
 
 /**
  * Represents a set section:
- *
+ * <p>
  *   - set: {_scroll_id: scroll_id}
  *
  */

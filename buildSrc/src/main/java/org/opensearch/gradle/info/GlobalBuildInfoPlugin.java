@@ -49,6 +49,7 @@ import org.gradle.jvm.toolchain.internal.InstallationLocation;
 import org.gradle.util.GradleVersion;
 
 import javax.inject.Inject;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -74,8 +75,8 @@ import java.util.stream.Stream;
 
 public class GlobalBuildInfoPlugin implements Plugin<Project> {
     private static final Logger LOGGER = Logging.getLogger(GlobalBuildInfoPlugin.class);
-    private static final String DEFAULT_LEGACY_VERSION_JAVA_FILE_PATH = "server/src/main/java/org/opensearch/LegacyESVersion.java";
-    private static final String DEFAULT_VERSION_JAVA_FILE_PATH = "server/src/main/java/org/opensearch/Version.java";
+    private static final String DEFAULT_LEGACY_VERSION_JAVA_FILE_PATH = "libs/core/src/main/java/org/opensearch/LegacyESVersion.java";
+    private static final String DEFAULT_VERSION_JAVA_FILE_PATH = "libs/core/src/main/java/org/opensearch/Version.java";
     private static Integer _defaultParallel = null;
 
     private final JvmMetadataDetector jvmMetadataDetector;
@@ -152,7 +153,7 @@ public class GlobalBuildInfoPlugin implements Plugin<Project> {
             versionLines.addAll(IOUtils.readLines(fis2, "UTF-8"));
             return new BwcVersions(versionLines);
         } catch (IOException e) {
-            throw new IllegalStateException("Unable to resolve to resolve bwc versions from versionsFile.", e);
+            throw new IllegalStateException("Unable to resolve bwc versions from versionsFile.", e);
         }
     }
 
@@ -198,7 +199,28 @@ public class GlobalBuildInfoPlugin implements Plugin<Project> {
     }
 
     private JvmInstallationMetadata getJavaInstallation(File javaHome) {
-        final InstallationLocation location = new InstallationLocation(javaHome, "Java home");
+        InstallationLocation location = null;
+
+        try {
+            try {
+                // The InstallationLocation(File, String) is used by Gradle pre-8.8
+                location = (InstallationLocation) MethodHandles.publicLookup()
+                    .findConstructor(InstallationLocation.class, MethodType.methodType(void.class, File.class, String.class))
+                    .invokeExact(javaHome, "Java home");
+            } catch (Throwable ex) {
+                // The InstallationLocation::userDefined is used by Gradle post-8.7
+                location = (InstallationLocation) MethodHandles.publicLookup()
+                    .findStatic(
+                        InstallationLocation.class,
+                        "userDefined",
+                        MethodType.methodType(InstallationLocation.class, File.class, String.class)
+                    )
+                    .invokeExact(javaHome, "Java home");
+
+            }
+        } catch (Throwable ex) {
+            throw new IllegalStateException("Unable to find suitable InstallationLocation constructor / factory method", ex);
+        }
 
         try {
             try {

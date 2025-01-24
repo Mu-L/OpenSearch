@@ -31,7 +31,6 @@
 
 package org.opensearch.common.geo.parsers;
 
-import org.locationtech.jts.geom.Coordinate;
 import org.opensearch.OpenSearchParseException;
 import org.opensearch.common.Explicit;
 import org.opensearch.common.geo.GeoPoint;
@@ -41,17 +40,19 @@ import org.opensearch.common.geo.builders.GeometryCollectionBuilder;
 import org.opensearch.common.geo.builders.ShapeBuilder;
 import org.opensearch.common.geo.builders.ShapeBuilder.Orientation;
 import org.opensearch.common.unit.DistanceUnit;
-import org.opensearch.common.xcontent.XContentParser;
-import org.opensearch.common.xcontent.XContentSubParser;
+import org.opensearch.core.xcontent.XContentParser;
+import org.opensearch.core.xcontent.XContentSubParser;
 import org.opensearch.index.mapper.AbstractShapeGeometryFieldMapper;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.locationtech.jts.geom.Coordinate;
+
 /**
  * Parses shape geometry represented in geojson
- *
+ * <p>
  * complies with geojson specification: https://tools.ietf.org/html/rfc7946
  *
  * @opensearch.internal

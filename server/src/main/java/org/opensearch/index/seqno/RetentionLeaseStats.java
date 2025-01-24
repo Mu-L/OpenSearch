@@ -32,11 +32,13 @@
 
 package org.opensearch.index.seqno;
 
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.io.stream.Writeable;
-import org.opensearch.common.xcontent.ToXContentFragment;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.common.annotation.PublicApi;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.xcontent.ToXContentFragment;
+import org.opensearch.core.xcontent.XContent;
+import org.opensearch.core.xcontent.XContentBuilder;
 
 import java.io.IOException;
 import java.util.Objects;
@@ -44,8 +46,9 @@ import java.util.Objects;
 /**
  * Represents retention lease stats.
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public final class RetentionLeaseStats implements ToXContentFragment, Writeable {
 
     private final RetentionLeases retentionLeases;
@@ -92,11 +95,11 @@ public final class RetentionLeaseStats implements ToXContentFragment, Writeable 
     }
 
     /**
-     * Converts the retention lease stats to {@link org.opensearch.common.xcontent.XContent} using the specified builder and pararms.
+     * Converts the retention lease stats to {@link XContent} using the specified builder and pararms.
      *
      * @param builder the builder
      * @param params  the params
-     * @return the builder that this retention lease collection was converted to {@link org.opensearch.common.xcontent.XContent} into
+     * @return the builder that this retention lease collection was converted to {@link XContent} into
      * @throws IOException if an I/O exception occurs writing to the builder
      */
     @Override

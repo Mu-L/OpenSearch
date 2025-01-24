@@ -13,15 +13,15 @@ import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.coordination.CoordinationMetadata.VotingConfigExclusion;
 import org.opensearch.cluster.metadata.Metadata;
 import org.opensearch.cluster.node.DiscoveryNode;
-import org.opensearch.common.Strings;
 import org.opensearch.common.unit.TimeValue;
+import org.opensearch.core.common.Strings;
 
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Set;
 
-import static org.opensearch.action.admin.cluster.configuration.VotingConfigExclusionsHelper.resolveVotingConfigExclusionsAndCheckMaximum;
 import static org.opensearch.action.admin.cluster.configuration.VotingConfigExclusionsHelper.addExclusionAndGetState;
+import static org.opensearch.action.admin.cluster.configuration.VotingConfigExclusionsHelper.resolveVotingConfigExclusionsAndCheckMaximum;
 
 /**
  * Static helper utilities to execute decommission
@@ -32,9 +32,10 @@ public class DecommissionHelper {
 
     static ClusterState registerDecommissionAttributeInClusterState(
         ClusterState currentState,
-        DecommissionAttribute decommissionAttribute
+        DecommissionAttribute decommissionAttribute,
+        String requestID
     ) {
-        DecommissionAttributeMetadata decommissionAttributeMetadata = new DecommissionAttributeMetadata(decommissionAttribute);
+        DecommissionAttributeMetadata decommissionAttributeMetadata = new DecommissionAttributeMetadata(decommissionAttribute, requestID);
         return ClusterState.builder(currentState)
             .metadata(Metadata.builder(currentState.metadata()).decommissionAttributeMetadata(decommissionAttributeMetadata))
             .build();
@@ -74,8 +75,8 @@ public class DecommissionHelper {
     ) {
         Set<DiscoveryNode> nodesWithDecommissionAttribute = new HashSet<>();
         Iterator<DiscoveryNode> nodesIter = onlyClusterManagerNodes
-            ? clusterState.nodes().getClusterManagerNodes().valuesIt()
-            : clusterState.nodes().getNodes().valuesIt();
+            ? clusterState.nodes().getClusterManagerNodes().values().iterator()
+            : clusterState.nodes().getNodes().values().iterator();
 
         while (nodesIter.hasNext()) {
             final DiscoveryNode node = nodesIter.next();

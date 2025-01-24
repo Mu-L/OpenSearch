@@ -33,10 +33,10 @@
 package org.opensearch.search.aggregations.bucket.range;
 
 import org.apache.lucene.util.InPlaceMergeSorter;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.io.stream.Writeable;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.search.aggregations.AggregatorFactories;
 import org.opensearch.search.aggregations.bucket.range.RangeAggregator.Range;
 import org.opensearch.search.aggregations.support.ValuesSourceAggregationBuilder;

@@ -32,12 +32,9 @@
 
 package org.opensearch.action.admin.cluster.node.tasks;
 
+import org.opensearch.ExceptionsHelper;
 import org.opensearch.OpenSearchException;
 import org.opensearch.OpenSearchTimeoutException;
-import org.opensearch.ExceptionsHelper;
-import org.opensearch.ResourceNotFoundException;
-import org.opensearch.action.ActionFuture;
-import org.opensearch.action.ActionListener;
 import org.opensearch.action.TaskOperationFailure;
 import org.opensearch.action.admin.cluster.health.ClusterHealthAction;
 import org.opensearch.action.admin.cluster.node.tasks.cancel.CancelTasksResponse;
@@ -57,37 +54,41 @@ import org.opensearch.action.search.SearchTransportService;
 import org.opensearch.action.support.WriteRequest;
 import org.opensearch.action.support.replication.ReplicationResponse;
 import org.opensearch.action.support.replication.TransportReplicationActionTests;
-import org.opensearch.cluster.node.DiscoveryNode;
-import org.opensearch.cluster.service.ClusterService;
-import org.opensearch.common.Strings;
+import org.opensearch.common.action.ActionFuture;
 import org.opensearch.common.collect.Tuple;
 import org.opensearch.common.regex.Regex;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.xcontent.XContentType;
+import org.opensearch.common.util.io.Streams;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.tasks.TaskId;
+import org.opensearch.core.tasks.resourcetracker.TaskResourceStats;
+import org.opensearch.core.tasks.resourcetracker.TaskResourceUsage;
+import org.opensearch.core.tasks.resourcetracker.TaskThreadUsage;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.index.mapper.StrictDynamicMappingException;
 import org.opensearch.index.query.QueryBuilders;
-import org.opensearch.plugins.Plugin;
 import org.opensearch.search.builder.SearchSourceBuilder;
 import org.opensearch.tasks.Task;
-import org.opensearch.tasks.TaskId;
 import org.opensearch.tasks.TaskInfo;
 import org.opensearch.tasks.TaskResult;
 import org.opensearch.tasks.TaskResultsService;
 import org.opensearch.test.OpenSearchIntegTestCase;
 import org.opensearch.test.tasks.MockTaskManager;
 import org.opensearch.test.tasks.MockTaskManagerListener;
-import org.opensearch.test.transport.MockTransportService;
 import org.opensearch.transport.ReceiveTimeoutTransportException;
 import org.opensearch.transport.TransportService;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
@@ -113,6 +114,8 @@ import static org.hamcrest.Matchers.lessThanOrEqualTo;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.startsWith;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.spy;
 
 /**
  * Integration tests for task management API
@@ -120,29 +123,27 @@ import static org.hamcrest.Matchers.startsWith;
  * We need at least 2 nodes so we have a cluster-manager node a non-cluster-manager node
  */
 @OpenSearchIntegTestCase.ClusterScope(scope = OpenSearchIntegTestCase.Scope.SUITE, minNumDataNodes = 2)
-public class TasksIT extends OpenSearchIntegTestCase {
+public class TasksIT extends AbstractTasksIT {
 
-    private Map<Tuple<String, String>, RecordingTaskManagerListener> listeners = new HashMap<>();
-
-    @Override
-    protected Collection<Class<? extends Plugin>> getMockPlugins() {
-        Collection<Class<? extends Plugin>> mockPlugins = new ArrayList<>(super.getMockPlugins());
-        mockPlugins.remove(MockTransportService.TestPlugin.class);
-        return mockPlugins;
-    }
-
-    @Override
-    protected Collection<Class<? extends Plugin>> nodePlugins() {
-        return Arrays.asList(MockTransportService.TestPlugin.class, TestTaskPlugin.class);
-    }
-
-    @Override
-    protected Settings nodeSettings(int nodeOrdinal) {
-        return Settings.builder()
-            .put(super.nodeSettings(nodeOrdinal))
-            .put(MockTaskManager.USE_MOCK_TASK_MANAGER_SETTING.getKey(), true)
-            .build();
-    }
+    protected final TaskInfo taskInfo = new TaskInfo(
+        new TaskId("fake", 1),
+        "test_type",
+        "test_action",
+        "test_description",
+        null,
+        0L,
+        1L,
+        false,
+        false,
+        TaskId.EMPTY_TASK_ID,
+        Collections.emptyMap(),
+        new TaskResourceStats(new HashMap<>() {
+            {
+                put("dummy-type1", new TaskResourceUsage(10, 20));
+            }
+        }, new TaskThreadUsage(30, 40)),
+        2L
+    );
 
     public void testTaskCounts() {
         // Run only on data nodes
@@ -319,7 +320,9 @@ public class TasksIT extends OpenSearchIntegTestCase {
         ensureGreen("test"); // Make sure all shards are allocated to catch replication tasks
         // ensures the mapping is available on all nodes so we won't retry the request (in case replicas don't have the right mapping).
         client().admin().indices().preparePutMapping("test").setSource("foo", "type=keyword").get();
-        client().prepareBulk().add(client().prepareIndex("test").setId("test_id").setSource("{\"foo\": \"bar\"}", XContentType.JSON)).get();
+        client().prepareBulk()
+            .add(client().prepareIndex("test").setId("test_id").setSource("{\"foo\": \"bar\"}", MediaTypeRegistry.JSON))
+            .get();
 
         // the bulk operation should produce one main task
         List<TaskInfo> topTask = findEvents(BulkAction.NAME, Tuple::v1);
@@ -370,7 +373,7 @@ public class TasksIT extends OpenSearchIntegTestCase {
         ensureGreen("test"); // Make sure all shards are allocated to catch replication tasks
         client().prepareIndex("test")
             .setId("test_id")
-            .setSource("{\"foo\": \"bar\"}", XContentType.JSON)
+            .setSource("{\"foo\": \"bar\"}", MediaTypeRegistry.JSON)
             .setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE)
             .get();
 
@@ -510,14 +513,12 @@ public class TasksIT extends OpenSearchIntegTestCase {
             if (index != null) {
                 index.join();
             }
-            assertBusy(
-                () -> {
-                    assertEquals(
-                        emptyList(),
-                        client().admin().cluster().prepareListTasks().setActions("indices:data/write/index*").get().getTasks()
-                    );
-                }
-            );
+            assertBusy(() -> {
+                assertEquals(
+                    emptyList(),
+                    client().admin().cluster().prepareListTasks().setActions("indices:data/write/index*").get().getTasks()
+                );
+            });
         }
     }
 
@@ -545,6 +546,17 @@ public class TasksIT extends OpenSearchIntegTestCase {
             .get();
         assertEquals(1, cancelTasksResponse.getTasks().size());
 
+        // Tasks are marked as cancelled at this point but not yet completed.
+        List<TaskInfo> taskInfoList = client().admin()
+            .cluster()
+            .prepareListTasks()
+            .setActions(TestTaskPlugin.TestTaskAction.NAME + "*")
+            .get()
+            .getTasks();
+        for (TaskInfo taskInfo : taskInfoList) {
+            assertTrue(taskInfo.isCancelled());
+            assertNotNull(taskInfo.getCancellationStartTime());
+        }
         future.get();
 
         logger.info("--> checking that test tasks are not running");
@@ -835,13 +847,13 @@ public class TasksIT extends OpenSearchIntegTestCase {
             .setSource(SearchSourceBuilder.searchSource().query(QueryBuilders.termQuery("task.action", taskInfo.getAction())))
             .get();
 
-        assertEquals(1L, searchResponse.getHits().getTotalHits().value);
+        assertEquals(1L, searchResponse.getHits().getTotalHits().value());
 
         searchResponse = client().prepareSearch(TaskResultsService.TASK_INDEX)
             .setSource(SearchSourceBuilder.searchSource().query(QueryBuilders.termQuery("task.node", taskInfo.getTaskId().getNodeId())))
             .get();
 
-        assertEquals(1L, searchResponse.getHits().getTotalHits().value);
+        assertEquals(1L, searchResponse.getHits().getTotalHits().value());
 
         GetTaskResponse getResponse = expectFinishedTask(taskId);
         assertEquals(result, getResponse.getTask().getResponseAsMap());
@@ -900,148 +912,77 @@ public class TasksIT extends OpenSearchIntegTestCase {
         // Save a fake task that looks like it is from a node that isn't part of the cluster
         CyclicBarrier b = new CyclicBarrier(2);
         TaskResultsService resultsService = internalCluster().getInstance(TaskResultsService.class);
-        resultsService.storeResult(
-            new TaskResult(
-                new TaskInfo(
-                    new TaskId("fake", 1),
-                    "test",
-                    "test",
-                    "",
-                    null,
-                    0,
-                    0,
-                    false,
-                    false,
-                    TaskId.EMPTY_TASK_ID,
-                    Collections.emptyMap(),
-                    null
-                ),
-                new RuntimeException("test")
-            ),
-            new ActionListener<Void>() {
-                @Override
-                public void onResponse(Void response) {
-                    try {
-                        b.await();
-                    } catch (InterruptedException | BrokenBarrierException e) {
-                        onFailure(e);
-                    }
-                }
-
-                @Override
-                public void onFailure(Exception e) {
-                    throw new RuntimeException(e);
+        resultsService.storeResult(new TaskResult(taskInfo, new RuntimeException("test")), new ActionListener<Void>() {
+            @Override
+            public void onResponse(Void response) {
+                try {
+                    b.await();
+                } catch (InterruptedException | BrokenBarrierException e) {
+                    onFailure(e);
                 }
             }
-        );
+
+            @Override
+            public void onFailure(Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
         b.await();
 
         // Now we can find it!
         GetTaskResponse response = expectFinishedTask(new TaskId("fake:1"));
-        assertEquals("test", response.getTask().getTask().getAction());
-        assertNotNull(response.getTask().getError());
-        assertNull(response.getTask().getResponse());
+        TaskResult taskResult = response.getTask();
+        TaskInfo task = taskResult.getTask();
+
+        assertEquals("fake", task.getTaskId().getNodeId());
+        assertEquals(1, task.getTaskId().getId());
+        assertEquals("test_type", task.getType());
+        assertEquals("test_action", task.getAction());
+        assertEquals("test_description", task.getDescription());
+        assertEquals(0L, task.getStartTime());
+        assertEquals(1L, task.getRunningTimeNanos());
+        assertFalse(task.isCancellable());
+        assertFalse(task.isCancelled());
+        assertEquals(TaskId.EMPTY_TASK_ID, task.getParentTaskId());
+        assertEquals(1, task.getResourceStats().getResourceUsageInfo().size());
+        assertEquals(30, task.getResourceStats().getThreadUsage().getThreadExecutions());
+        assertEquals(40, task.getResourceStats().getThreadUsage().getActiveThreads());
+        assertEquals(Long.valueOf(2L), task.getCancellationStartTime());
+
+        assertNotNull(taskResult.getError());
+        assertNull(taskResult.getResponse());
     }
 
-    @Override
-    public void tearDown() throws Exception {
-        for (Map.Entry<Tuple<String, String>, RecordingTaskManagerListener> entry : listeners.entrySet()) {
-            ((MockTaskManager) internalCluster().getInstance(TransportService.class, entry.getKey().v1()).getTaskManager()).removeListener(
-                entry.getValue()
-            );
-        }
-        listeners.clear();
-        super.tearDown();
-    }
+    public void testStoreTaskResultFailsDueToMissingIndexMappingFields() throws IOException {
+        // given
+        TaskResultsService resultsService = spy(internalCluster().getInstance(TaskResultsService.class));
 
-    /**
-     * Registers recording task event listeners with the given action mask on all nodes
-     */
-    private void registerTaskManagerListeners(String actionMasks) {
-        for (String nodeName : internalCluster().getNodeNames()) {
-            DiscoveryNode node = internalCluster().getInstance(ClusterService.class, nodeName).localNode();
-            RecordingTaskManagerListener listener = new RecordingTaskManagerListener(node.getId(), actionMasks.split(","));
-            ((MockTaskManager) internalCluster().getInstance(TransportService.class, nodeName).getTaskManager()).addListener(listener);
-            RecordingTaskManagerListener oldListener = listeners.put(new Tuple<>(node.getName(), actionMasks), listener);
-            assertNull(oldListener);
-        }
-    }
+        InputStream mockInputStream = getClass().getResourceAsStream("/org/opensearch/tasks/missing-fields-task-index-mapping.json");
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        Streams.copy(mockInputStream, out);
+        String mockJsonString = out.toString(StandardCharsets.UTF_8.name());
 
-    /**
-     * Resets all recording task event listeners with the given action mask on all nodes
-     */
-    private void resetTaskManagerListeners(String actionMasks) {
-        for (Map.Entry<Tuple<String, String>, RecordingTaskManagerListener> entry : listeners.entrySet()) {
-            if (actionMasks == null || entry.getKey().v2().equals(actionMasks)) {
-                entry.getValue().reset();
-            }
-        }
-    }
+        // when & then
+        doReturn(mockJsonString).when(resultsService).taskResultIndexMapping();
 
-    /**
-     * Returns the number of events that satisfy the criteria across all nodes
-     *
-     * @param actionMasks action masks to match
-     * @return number of events that satisfy the criteria
-     */
-    private int numberOfEvents(String actionMasks, Function<Tuple<Boolean, TaskInfo>, Boolean> criteria) {
-        return findEvents(actionMasks, criteria).size();
-    }
+        CompletionException thrown = assertThrows(CompletionException.class, () -> {
+            CompletableFuture<Void> future = new CompletableFuture<>();
 
-    /**
-     * Returns all events that satisfy the criteria across all nodes
-     *
-     * @param actionMasks action masks to match
-     * @return number of events that satisfy the criteria
-     */
-    private List<TaskInfo> findEvents(String actionMasks, Function<Tuple<Boolean, TaskInfo>, Boolean> criteria) {
-        List<TaskInfo> events = new ArrayList<>();
-        for (Map.Entry<Tuple<String, String>, RecordingTaskManagerListener> entry : listeners.entrySet()) {
-            if (actionMasks == null || entry.getKey().v2().equals(actionMasks)) {
-                for (Tuple<Boolean, TaskInfo> taskEvent : entry.getValue().getEvents()) {
-                    if (criteria.apply(taskEvent)) {
-                        events.add(taskEvent.v2());
-                    }
+            resultsService.storeResult(new TaskResult(taskInfo, new RuntimeException("test")), new ActionListener<Void>() {
+                @Override
+                public void onResponse(Void response) {
+                    future.complete(null);
                 }
-            }
-        }
-        return events;
-    }
 
-    /**
-     * Asserts that all tasks in the tasks list have the same parentTask
-     */
-    private void assertParentTask(List<TaskInfo> tasks, TaskInfo parentTask) {
-        for (TaskInfo task : tasks) {
-            assertParentTask(task, parentTask);
-        }
-    }
+                @Override
+                public void onFailure(Exception e) {
+                    future.completeExceptionally(e);
+                }
+            });
 
-    private void assertParentTask(TaskInfo task, TaskInfo parentTask) {
-        assertTrue(task.getParentTaskId().isSet());
-        assertEquals(parentTask.getTaskId().getNodeId(), task.getParentTaskId().getNodeId());
-        assertTrue(Strings.hasLength(task.getParentTaskId().getNodeId()));
-        assertEquals(parentTask.getId(), task.getParentTaskId().getId());
-    }
+            future.join();
+        });
 
-    private void expectNotFound(ThrowingRunnable r) {
-        Exception e = expectThrows(Exception.class, r);
-        ResourceNotFoundException notFound = (ResourceNotFoundException) ExceptionsHelper.unwrap(e, ResourceNotFoundException.class);
-        if (notFound == null) {
-            throw new AssertionError("Expected " + ResourceNotFoundException.class.getSimpleName(), e);
-        }
-    }
-
-    /**
-     * Fetch the task status from the list tasks API using it's "fallback to get from the task index" behavior. Asserts some obvious stuff
-     * about the fetched task and returns a map of it's status.
-     */
-    private GetTaskResponse expectFinishedTask(TaskId taskId) throws IOException {
-        GetTaskResponse response = client().admin().cluster().prepareGetTask(taskId).get();
-        assertTrue("the task should have been completed before fetching", response.getTask().isCompleted());
-        TaskInfo info = response.getTask().getTask();
-        assertEquals(taskId, info.getTaskId());
-        assertNull(info.getStatus()); // The test task doesn't have any status
-        return response;
+        assertTrue(thrown.getCause() instanceof StrictDynamicMappingException);
     }
 }

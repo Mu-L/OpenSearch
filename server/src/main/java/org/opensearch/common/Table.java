@@ -32,7 +32,9 @@
 
 package org.opensearch.common;
 
+import org.opensearch.action.pagination.PageToken;
 import org.opensearch.common.time.DateFormatter;
+import org.opensearch.core.common.Strings;
 
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -58,8 +60,18 @@ public class Table {
     private List<Cell> currentCells;
     private boolean inHeaders = false;
     private boolean withTime = false;
+    /**
+     * paginatedQueryResponse if null will imply the Table response is not paginated.
+     */
+    private PageToken pageToken;
     public static final String EPOCH = "epoch";
     public static final String TIMESTAMP = "timestamp";
+
+    public Table() {}
+
+    public Table(@Nullable PageToken pageToken) {
+        this.pageToken = pageToken;
+    }
 
     public Table startHeaders() {
         inHeaders = true;
@@ -227,6 +239,10 @@ public class Table {
             headerAliasMap.put(headerName, headerName);
         }
         return headerAliasMap;
+    }
+
+    public PageToken getPageToken() {
+        return pageToken;
     }
 
     /**

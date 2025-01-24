@@ -36,14 +36,16 @@ import org.apache.lucene.search.Query;
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.SortField;
 import org.apache.lucene.search.join.ToChildBlockJoinQuery;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.ParsingException;
-import org.opensearch.common.Strings;
-import org.opensearch.common.io.stream.NamedWriteable;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.lucene.search.Queries;
-import org.opensearch.common.xcontent.NamedObjectNotFoundException;
-import org.opensearch.common.xcontent.ToXContentObject;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.ParsingException;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.io.stream.NamedWriteable;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.NamedObjectNotFoundException;
+import org.opensearch.core.xcontent.ToXContentObject;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.fielddata.IndexFieldData.XFieldComparatorSource.Nested;
 import org.opensearch.index.mapper.ObjectMapper;
 import org.opensearch.index.query.QueryBuilder;
@@ -63,8 +65,9 @@ import static org.opensearch.index.query.AbstractQueryBuilder.parseInnerQueryBui
 /**
  * Base class for sort object builders
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public abstract class SortBuilder<T extends SortBuilder<T>> implements NamedWriteable, ToXContentObject, Rewriteable<SortBuilder<?>> {
 
     protected SortOrder order = SortOrder.ASC;
@@ -282,6 +285,6 @@ public abstract class SortBuilder<T extends SortBuilder<T>> implements NamedWrit
 
     @Override
     public String toString() {
-        return Strings.toString(this, true, true);
+        return Strings.toString(MediaTypeRegistry.JSON, this, true, true);
     }
 }

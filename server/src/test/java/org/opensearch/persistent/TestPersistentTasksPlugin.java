@@ -35,10 +35,8 @@ package org.opensearch.persistent;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.Version;
-import org.opensearch.action.ActionType;
-import org.opensearch.action.ActionListener;
 import org.opensearch.action.ActionRequest;
-import org.opensearch.action.ActionResponse;
+import org.opensearch.action.ActionType;
 import org.opensearch.action.FailedNodeException;
 import org.opensearch.action.TaskOperationFailure;
 import org.opensearch.action.support.ActionFilters;
@@ -52,26 +50,29 @@ import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.metadata.IndexNameExpressionResolver;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.service.ClusterService;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.Strings;
-import org.opensearch.common.component.Lifecycle;
 import org.opensearch.common.inject.Inject;
-import org.opensearch.common.io.stream.NamedWriteableRegistry;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.io.stream.Writeable;
+import org.opensearch.common.lifecycle.Lifecycle;
 import org.opensearch.common.settings.SettingsModule;
-import org.opensearch.common.xcontent.ConstructingObjectParser;
-import org.opensearch.common.xcontent.NamedXContentRegistry;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.action.ActionResponse;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.io.stream.NamedWriteableRegistry;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.tasks.TaskCancelledException;
+import org.opensearch.core.tasks.TaskId;
+import org.opensearch.core.xcontent.ConstructingObjectParser;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.persistent.PersistentTasksCustomMetadata.Assignment;
 import org.opensearch.persistent.PersistentTasksCustomMetadata.PersistentTask;
 import org.opensearch.plugins.ActionPlugin;
 import org.opensearch.plugins.PersistentTaskPlugin;
 import org.opensearch.plugins.Plugin;
-import org.opensearch.tasks.TaskCancelledException;
-import org.opensearch.tasks.TaskId;
 import org.opensearch.threadpool.ThreadPool;
 import org.opensearch.transport.TransportService;
 
@@ -88,7 +89,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.Objects.requireNonNull;
-import static org.opensearch.common.xcontent.ConstructingObjectParser.constructorArg;
+import static org.opensearch.core.xcontent.ConstructingObjectParser.constructorArg;
 import static org.opensearch.test.OpenSearchTestCase.assertBusy;
 import static org.opensearch.test.OpenSearchTestCase.randomBoolean;
 import static org.junit.Assert.assertTrue;
@@ -177,7 +178,7 @@ public class TestPersistentTasksPlugin extends Plugin implements ActionPlugin, P
             executorNodeAttr = in.readOptionalString();
             responseNode = in.readOptionalString();
             testParam = in.readOptionalString();
-            minVersion = Version.readVersion(in);
+            minVersion = in.readVersion();
             feature = Optional.ofNullable(in.readOptionalString());
         }
 
@@ -207,7 +208,7 @@ public class TestPersistentTasksPlugin extends Plugin implements ActionPlugin, P
             out.writeOptionalString(executorNodeAttr);
             out.writeOptionalString(responseNode);
             out.writeOptionalString(testParam);
-            Version.writeVersion(minVersion, out);
+            out.writeVersion(minVersion);
             out.writeOptionalString(feature.orElse(null));
         }
 
@@ -299,7 +300,7 @@ public class TestPersistentTasksPlugin extends Plugin implements ActionPlugin, P
 
         @Override
         public String toString() {
-            return Strings.toString(this);
+            return Strings.toString(MediaTypeRegistry.JSON, this);
         }
 
         // Implements equals and hashcode for testing

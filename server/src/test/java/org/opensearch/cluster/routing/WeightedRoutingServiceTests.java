@@ -8,13 +8,9 @@
 
 package org.opensearch.cluster.routing;
 
-import org.hamcrest.MatcherAssert;
-import org.junit.After;
-import org.junit.Before;
 import org.opensearch.Version;
-import org.opensearch.action.ActionListener;
-import org.opensearch.action.admin.cluster.shards.routing.weighted.delete.ClusterDeleteWeightedRoutingRequest;
 import org.opensearch.action.ActionRequestValidationException;
+import org.opensearch.action.admin.cluster.shards.routing.weighted.delete.ClusterDeleteWeightedRoutingRequest;
 import org.opensearch.action.admin.cluster.shards.routing.weighted.delete.ClusterDeleteWeightedRoutingResponse;
 import org.opensearch.action.admin.cluster.shards.routing.weighted.put.ClusterAddWeightedRoutingAction;
 import org.opensearch.action.admin.cluster.shards.routing.weighted.put.ClusterPutWeightedRoutingRequestBuilder;
@@ -34,15 +30,21 @@ import org.opensearch.cluster.routing.allocation.decider.AwarenessAllocationDeci
 import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.settings.Settings;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.telemetry.tracing.noop.NoopTracer;
 import org.opensearch.test.ClusterServiceUtils;
 import org.opensearch.test.OpenSearchTestCase;
 import org.opensearch.test.transport.MockTransport;
 import org.opensearch.threadpool.TestThreadPool;
 import org.opensearch.threadpool.ThreadPool;
 import org.opensearch.transport.TransportService;
+import org.hamcrest.MatcherAssert;
+import org.junit.After;
+import org.junit.Before;
 
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -93,8 +95,8 @@ public class WeightedRoutingServiceTests extends OpenSearchTestCase {
             TransportService.NOOP_TRANSPORT_INTERCEPTOR,
             boundTransportAddress -> clusterService.state().nodes().get("nodes1"),
             null,
-            Collections.emptySet()
-
+            Collections.emptySet(),
+            NoopTracer.INSTANCE
         );
 
         Settings.Builder settingsBuilder = Settings.builder()
@@ -130,7 +132,7 @@ public class WeightedRoutingServiceTests extends OpenSearchTestCase {
 
     private ClusterState addDataNodeForAZone(ClusterState clusterState, String zone, String... nodeIds) {
         DiscoveryNodes.Builder nodeBuilder = DiscoveryNodes.builder(clusterState.nodes());
-        org.opensearch.common.collect.List.of(nodeIds)
+        List.of(nodeIds)
             .forEach(
                 nodeId -> nodeBuilder.add(
                     new DiscoveryNode(
@@ -149,7 +151,7 @@ public class WeightedRoutingServiceTests extends OpenSearchTestCase {
     private ClusterState addClusterManagerNodeForAZone(ClusterState clusterState, String zone, String... nodeIds) {
 
         DiscoveryNodes.Builder nodeBuilder = DiscoveryNodes.builder(clusterState.nodes());
-        org.opensearch.common.collect.List.of(nodeIds)
+        List.of(nodeIds)
             .forEach(
                 nodeId -> nodeBuilder.add(
                     new DiscoveryNode(
@@ -184,7 +186,11 @@ public class WeightedRoutingServiceTests extends OpenSearchTestCase {
 
     private ClusterState setDecommissionAttribute(ClusterState clusterState, DecommissionStatus status) {
         DecommissionAttribute decommissionAttribute = new DecommissionAttribute("zone", "zone_A");
-        DecommissionAttributeMetadata decommissionAttributeMetadata = new DecommissionAttributeMetadata(decommissionAttribute, status);
+        DecommissionAttributeMetadata decommissionAttributeMetadata = new DecommissionAttributeMetadata(
+            decommissionAttribute,
+            status,
+            randomAlphaOfLength(10)
+        );
         Metadata.Builder metadataBuilder = Metadata.builder(clusterState.metadata());
         metadataBuilder.decommissionAttributeMetadata(decommissionAttributeMetadata);
         clusterState = ClusterState.builder(clusterState).metadata(metadataBuilder).build();

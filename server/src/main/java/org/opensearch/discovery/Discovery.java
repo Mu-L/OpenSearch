@@ -32,8 +32,9 @@
 
 package org.opensearch.discovery;
 
+import org.opensearch.cluster.NodeConnectionsService;
 import org.opensearch.cluster.coordination.ClusterStatePublisher;
-import org.opensearch.common.component.LifecycleComponent;
+import org.opensearch.common.lifecycle.LifecycleComponent;
 
 /**
  * A pluggable module allowing to implement discovery of other nodes, publishing of the cluster
@@ -54,4 +55,8 @@ public interface Discovery extends LifecycleComponent, ClusterStatePublisher {
      */
     void startInitialJoin();
 
+    /**
+     * Sets the NodeConnectionsService which is an abstraction used for connection management
+     */
+    void setNodeConnectionsService(NodeConnectionsService nodeConnectionsService);
 }

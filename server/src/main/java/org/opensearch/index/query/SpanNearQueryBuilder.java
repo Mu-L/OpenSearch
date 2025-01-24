@@ -34,15 +34,17 @@ package org.opensearch.index.query;
 
 import org.apache.lucene.queries.spans.SpanNearQuery;
 import org.apache.lucene.queries.spans.SpanQuery;
+import org.apache.lucene.search.BooleanClause;
 import org.apache.lucene.search.Query;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.ParsingException;
-import org.opensearch.common.Strings;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentLocation;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.ParsingException;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentLocation;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.mapper.MappedFieldType;
 
 import java.io.IOException;
@@ -298,6 +300,17 @@ public class SpanNearQueryBuilder extends AbstractQueryBuilder<SpanNearQueryBuil
         return NAME;
     }
 
+    @Override
+    public void visit(QueryBuilderVisitor visitor) {
+        visitor.accept(this);
+        if (this.clauses.isEmpty() == false) {
+            QueryBuilderVisitor subVisitor = visitor.getChildVisitor(BooleanClause.Occur.MUST);
+            for (QueryBuilder subQb : this.clauses) {
+                subVisitor.accept(subQb);
+            }
+        }
+    }
+
     /**
      * SpanGapQueryBuilder enables gaps in a SpanNearQuery.
      * Since, SpanGapQuery is private to SpanNearQuery, SpanGapQueryBuilder cannot
@@ -309,7 +322,7 @@ public class SpanNearQueryBuilder extends AbstractQueryBuilder<SpanNearQueryBuil
      *
      * @opensearch.internal
      */
-    public static class SpanGapQueryBuilder implements SpanQueryBuilder {
+    public static class SpanGapQueryBuilder implements SpanQueryBuilder, WithFieldName {
         public static final String NAME = "span_gap";
 
         /** Name of field to match against. */
@@ -345,6 +358,7 @@ public class SpanNearQueryBuilder extends AbstractQueryBuilder<SpanNearQueryBuil
         /**
          * @return fieldName  The name of the field
          */
+        @Override
         public String fieldName() {
             return fieldName;
         }
@@ -444,7 +458,7 @@ public class SpanNearQueryBuilder extends AbstractQueryBuilder<SpanNearQueryBuil
 
         @Override
         public final String toString() {
-            return Strings.toString(this, true, true);
+            return Strings.toString(MediaTypeRegistry.JSON, this, true, true);
         }
 
         // copied from AbstractQueryBuilder

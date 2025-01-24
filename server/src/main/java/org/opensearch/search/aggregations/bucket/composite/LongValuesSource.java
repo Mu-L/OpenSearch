@@ -39,7 +39,7 @@ import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.SortedNumericDocValues;
 import org.apache.lucene.search.BoostQuery;
 import org.apache.lucene.search.ConstantScoreQuery;
-import org.apache.lucene.search.DocValuesFieldExistsQuery;
+import org.apache.lucene.search.FieldExistsQuery;
 import org.apache.lucene.search.IndexOrDocValuesQuery;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.PointRangeQuery;
@@ -170,11 +170,9 @@ public class LongValuesSource extends SingleDimensionValuesSource<Long> {
             afterValue = null;
         } else {
             // parse the value from a string in case it is a date or a formatted unsigned long.
-            afterValue = format.parseLong(
-                value.toString(),
-                false,
-                () -> { throw new IllegalArgumentException("now() is not supported in [after] key"); }
-            );
+            afterValue = format.parseLong(value.toString(), false, () -> {
+                throw new IllegalArgumentException("now() is not supported in [after] key");
+            });
         }
     }
 
@@ -221,7 +219,7 @@ public class LongValuesSource extends SingleDimensionValuesSource<Long> {
         };
     }
 
-    private static Query extractQuery(Query query) {
+    static Query extractQuery(Query query) {
         if (query instanceof BoostQuery) {
             return extractQuery(((BoostQuery) query).getQuery());
         } else if (query instanceof IndexOrDocValuesQuery) {
@@ -236,7 +234,7 @@ public class LongValuesSource extends SingleDimensionValuesSource<Long> {
     /**
      * Returns true if we can use <code>query</code> with a {@link SortedDocsProducer} on <code>fieldName</code>.
      */
-    private static boolean checkMatchAllOrRangeQuery(Query query, String fieldName) {
+    static boolean checkMatchAllOrRangeQuery(Query query, String fieldName) {
         if (query == null) {
             return true;
         } else if (query.getClass() == MatchAllDocsQuery.class) {
@@ -244,8 +242,8 @@ public class LongValuesSource extends SingleDimensionValuesSource<Long> {
         } else if (query instanceof PointRangeQuery) {
             PointRangeQuery pointQuery = (PointRangeQuery) query;
             return fieldName.equals(pointQuery.getField());
-        } else if (query instanceof DocValuesFieldExistsQuery) {
-            DocValuesFieldExistsQuery existsQuery = (DocValuesFieldExistsQuery) query;
+        } else if (query instanceof FieldExistsQuery) {
+            FieldExistsQuery existsQuery = (FieldExistsQuery) query;
             return fieldName.equals(existsQuery.getField());
         } else {
             return false;

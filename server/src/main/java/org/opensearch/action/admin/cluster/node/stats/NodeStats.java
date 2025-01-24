@@ -36,26 +36,37 @@ import org.opensearch.Version;
 import org.opensearch.action.support.nodes.BaseNodeResponse;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.node.DiscoveryNodeRole;
+import org.opensearch.cluster.routing.WeightedRoutingStats;
+import org.opensearch.cluster.service.ClusterManagerThrottlingStats;
 import org.opensearch.common.Nullable;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.xcontent.ToXContentFragment;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.common.cache.service.NodeCacheStats;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.indices.breaker.AllCircuitBreakerStats;
+import org.opensearch.core.xcontent.ToXContentFragment;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.discovery.DiscoveryStats;
 import org.opensearch.http.HttpStats;
+import org.opensearch.index.SegmentReplicationRejectionStats;
 import org.opensearch.index.stats.IndexingPressureStats;
 import org.opensearch.index.stats.ShardIndexingPressureStats;
+import org.opensearch.index.store.remote.filecache.FileCacheStats;
 import org.opensearch.indices.NodeIndicesStats;
-import org.opensearch.indices.breaker.AllCircuitBreakerStats;
 import org.opensearch.ingest.IngestStats;
 import org.opensearch.monitor.fs.FsInfo;
 import org.opensearch.monitor.jvm.JvmStats;
 import org.opensearch.monitor.os.OsStats;
 import org.opensearch.monitor.process.ProcessStats;
 import org.opensearch.node.AdaptiveSelectionStats;
+import org.opensearch.node.NodesResourceUsageStats;
+import org.opensearch.node.remotestore.RemoteStoreNodeStats;
+import org.opensearch.ratelimitting.admissioncontrol.stats.AdmissionControlStats;
+import org.opensearch.repositories.RepositoriesStats;
 import org.opensearch.script.ScriptCacheStats;
 import org.opensearch.script.ScriptStats;
 import org.opensearch.search.backpressure.stats.SearchBackpressureStats;
+import org.opensearch.search.pipeline.SearchPipelineStats;
+import org.opensearch.tasks.TaskCancellationStats;
 import org.opensearch.threadpool.ThreadPoolStats;
 import org.opensearch.transport.TransportStats;
 
@@ -122,6 +133,39 @@ public class NodeStats extends BaseNodeResponse implements ToXContentFragment {
     @Nullable
     private SearchBackpressureStats searchBackpressureStats;
 
+    @Nullable
+    private SegmentReplicationRejectionStats segmentReplicationRejectionStats;
+
+    @Nullable
+    private ClusterManagerThrottlingStats clusterManagerThrottlingStats;
+
+    @Nullable
+    private WeightedRoutingStats weightedRoutingStats;
+
+    @Nullable
+    private FileCacheStats fileCacheStats;
+
+    @Nullable
+    private TaskCancellationStats taskCancellationStats;
+
+    @Nullable
+    private SearchPipelineStats searchPipelineStats;
+
+    @Nullable
+    private NodesResourceUsageStats resourceUsageStats;
+
+    @Nullable
+    private RepositoriesStats repositoriesStats;
+
+    @Nullable
+    private AdmissionControlStats admissionControlStats;
+
+    @Nullable
+    private NodeCacheStats nodeCacheStats;
+
+    @Nullable
+    private RemoteStoreNodeStats remoteStoreNodeStats;
+
     public NodeStats(StreamInput in) throws IOException {
         super(in);
         timestamp = in.readVLong();
@@ -152,6 +196,62 @@ public class NodeStats extends BaseNodeResponse implements ToXContentFragment {
         } else {
             searchBackpressureStats = null;
         }
+
+        if (in.getVersion().onOrAfter(Version.V_2_6_0)) {
+            clusterManagerThrottlingStats = in.readOptionalWriteable(ClusterManagerThrottlingStats::new);
+        } else {
+            clusterManagerThrottlingStats = null;
+        }
+        if (in.getVersion().onOrAfter(Version.V_2_6_0)) {
+            weightedRoutingStats = in.readOptionalWriteable(WeightedRoutingStats::new);
+        } else {
+            weightedRoutingStats = null;
+        }
+        if (in.getVersion().onOrAfter(Version.V_2_7_0)) {
+            fileCacheStats = in.readOptionalWriteable(FileCacheStats::new);
+        } else {
+            fileCacheStats = null;
+        }
+        if (in.getVersion().onOrAfter(Version.V_2_9_0)) {
+            taskCancellationStats = in.readOptionalWriteable(TaskCancellationStats::new);
+        } else {
+            taskCancellationStats = null;
+        }
+        if (in.getVersion().onOrAfter(Version.V_2_9_0)) {
+            searchPipelineStats = in.readOptionalWriteable(SearchPipelineStats::new);
+        } else {
+            searchPipelineStats = null;
+        }
+        if (in.getVersion().onOrAfter(Version.V_2_12_0)) {
+            resourceUsageStats = in.readOptionalWriteable(NodesResourceUsageStats::new);
+        } else {
+            resourceUsageStats = null;
+        }
+        if (in.getVersion().onOrAfter(Version.V_2_12_0)) {
+            segmentReplicationRejectionStats = in.readOptionalWriteable(SegmentReplicationRejectionStats::new);
+        } else {
+            segmentReplicationRejectionStats = null;
+        }
+        if (in.getVersion().onOrAfter(Version.V_2_12_0)) {
+            repositoriesStats = in.readOptionalWriteable(RepositoriesStats::new);
+        } else {
+            repositoriesStats = null;
+        }
+        if (in.getVersion().onOrAfter(Version.V_2_12_0)) {
+            admissionControlStats = in.readOptionalWriteable(AdmissionControlStats::new);
+        } else {
+            admissionControlStats = null;
+        }
+        if (in.getVersion().onOrAfter(Version.V_2_14_0)) {
+            nodeCacheStats = in.readOptionalWriteable(NodeCacheStats::new);
+        } else {
+            nodeCacheStats = null;
+        }
+        if (in.getVersion().onOrAfter(Version.V_2_18_0)) {
+            remoteStoreNodeStats = in.readOptionalWriteable(RemoteStoreNodeStats::new);
+        } else {
+            remoteStoreNodeStats = null;
+        }
     }
 
     public NodeStats(
@@ -170,10 +270,21 @@ public class NodeStats extends BaseNodeResponse implements ToXContentFragment {
         @Nullable DiscoveryStats discoveryStats,
         @Nullable IngestStats ingestStats,
         @Nullable AdaptiveSelectionStats adaptiveSelectionStats,
+        @Nullable NodesResourceUsageStats resourceUsageStats,
         @Nullable ScriptCacheStats scriptCacheStats,
         @Nullable IndexingPressureStats indexingPressureStats,
         @Nullable ShardIndexingPressureStats shardIndexingPressureStats,
-        @Nullable SearchBackpressureStats searchBackpressureStats
+        @Nullable SearchBackpressureStats searchBackpressureStats,
+        @Nullable ClusterManagerThrottlingStats clusterManagerThrottlingStats,
+        @Nullable WeightedRoutingStats weightedRoutingStats,
+        @Nullable FileCacheStats fileCacheStats,
+        @Nullable TaskCancellationStats taskCancellationStats,
+        @Nullable SearchPipelineStats searchPipelineStats,
+        @Nullable SegmentReplicationRejectionStats segmentReplicationRejectionStats,
+        @Nullable RepositoriesStats repositoriesStats,
+        @Nullable AdmissionControlStats admissionControlStats,
+        @Nullable NodeCacheStats nodeCacheStats,
+        @Nullable RemoteStoreNodeStats remoteStoreNodeStats
     ) {
         super(node);
         this.timestamp = timestamp;
@@ -190,10 +301,21 @@ public class NodeStats extends BaseNodeResponse implements ToXContentFragment {
         this.discoveryStats = discoveryStats;
         this.ingestStats = ingestStats;
         this.adaptiveSelectionStats = adaptiveSelectionStats;
+        this.resourceUsageStats = resourceUsageStats;
         this.scriptCacheStats = scriptCacheStats;
         this.indexingPressureStats = indexingPressureStats;
         this.shardIndexingPressureStats = shardIndexingPressureStats;
         this.searchBackpressureStats = searchBackpressureStats;
+        this.clusterManagerThrottlingStats = clusterManagerThrottlingStats;
+        this.weightedRoutingStats = weightedRoutingStats;
+        this.fileCacheStats = fileCacheStats;
+        this.taskCancellationStats = taskCancellationStats;
+        this.searchPipelineStats = searchPipelineStats;
+        this.segmentReplicationRejectionStats = segmentReplicationRejectionStats;
+        this.repositoriesStats = repositoriesStats;
+        this.admissionControlStats = admissionControlStats;
+        this.nodeCacheStats = nodeCacheStats;
+        this.remoteStoreNodeStats = remoteStoreNodeStats;
     }
 
     public long getTimestamp() {
@@ -289,6 +411,11 @@ public class NodeStats extends BaseNodeResponse implements ToXContentFragment {
     }
 
     @Nullable
+    public NodesResourceUsageStats getResourceUsageStats() {
+        return resourceUsageStats;
+    }
+
+    @Nullable
     public ScriptCacheStats getScriptCacheStats() {
         return scriptCacheStats;
     }
@@ -306,6 +433,54 @@ public class NodeStats extends BaseNodeResponse implements ToXContentFragment {
     @Nullable
     public SearchBackpressureStats getSearchBackpressureStats() {
         return searchBackpressureStats;
+    }
+
+    @Nullable
+    public ClusterManagerThrottlingStats getClusterManagerThrottlingStats() {
+        return clusterManagerThrottlingStats;
+    }
+
+    public WeightedRoutingStats getWeightedRoutingStats() {
+        return weightedRoutingStats;
+    }
+
+    public FileCacheStats getFileCacheStats() {
+        return fileCacheStats;
+    }
+
+    @Nullable
+    public TaskCancellationStats getTaskCancellationStats() {
+        return taskCancellationStats;
+    }
+
+    @Nullable
+    public SearchPipelineStats getSearchPipelineStats() {
+        return searchPipelineStats;
+    }
+
+    @Nullable
+    public SegmentReplicationRejectionStats getSegmentReplicationRejectionStats() {
+        return segmentReplicationRejectionStats;
+    }
+
+    @Nullable
+    public RepositoriesStats getRepositoriesStats() {
+        return repositoriesStats;
+    }
+
+    @Nullable
+    public AdmissionControlStats getAdmissionControlStats() {
+        return admissionControlStats;
+    }
+
+    @Nullable
+    public NodeCacheStats getNodeCacheStats() {
+        return nodeCacheStats;
+    }
+
+    @Nullable
+    public RemoteStoreNodeStats getRemoteStoreNodeStats() {
+        return remoteStoreNodeStats;
     }
 
     @Override
@@ -335,6 +510,39 @@ public class NodeStats extends BaseNodeResponse implements ToXContentFragment {
 
         if (out.getVersion().onOrAfter(Version.V_2_4_0)) {
             out.writeOptionalWriteable(searchBackpressureStats);
+        }
+        if (out.getVersion().onOrAfter(Version.V_2_6_0)) {
+            out.writeOptionalWriteable(clusterManagerThrottlingStats);
+        }
+        if (out.getVersion().onOrAfter(Version.V_2_6_0)) {
+            out.writeOptionalWriteable(weightedRoutingStats);
+        }
+        if (out.getVersion().onOrAfter(Version.V_2_7_0)) {
+            out.writeOptionalWriteable(fileCacheStats);
+        }
+        if (out.getVersion().onOrAfter(Version.V_2_9_0)) {
+            out.writeOptionalWriteable(taskCancellationStats);
+        }
+        if (out.getVersion().onOrAfter(Version.V_2_9_0)) {
+            out.writeOptionalWriteable(searchPipelineStats);
+        }
+        if (out.getVersion().onOrAfter(Version.V_2_12_0)) {
+            out.writeOptionalWriteable(resourceUsageStats);
+        }
+        if (out.getVersion().onOrAfter(Version.V_2_12_0)) {
+            out.writeOptionalWriteable(segmentReplicationRejectionStats);
+        }
+        if (out.getVersion().onOrAfter(Version.V_2_12_0)) {
+            out.writeOptionalWriteable(repositoriesStats);
+        }
+        if (out.getVersion().onOrAfter(Version.V_2_12_0)) {
+            out.writeOptionalWriteable(admissionControlStats);
+        }
+        if (out.getVersion().onOrAfter(Version.V_2_14_0)) {
+            out.writeOptionalWriteable(nodeCacheStats);
+        }
+        if (out.getVersion().onOrAfter(Version.V_2_18_0)) {
+            out.writeOptionalWriteable(remoteStoreNodeStats);
         }
     }
 
@@ -410,6 +618,40 @@ public class NodeStats extends BaseNodeResponse implements ToXContentFragment {
         }
         if (getSearchBackpressureStats() != null) {
             getSearchBackpressureStats().toXContent(builder, params);
+        }
+        if (getClusterManagerThrottlingStats() != null) {
+            getClusterManagerThrottlingStats().toXContent(builder, params);
+        }
+        if (getWeightedRoutingStats() != null) {
+            getWeightedRoutingStats().toXContent(builder, params);
+        }
+        if (getFileCacheStats() != null) {
+            getFileCacheStats().toXContent(builder, params);
+        }
+        if (getTaskCancellationStats() != null) {
+            getTaskCancellationStats().toXContent(builder, params);
+        }
+        if (getSearchPipelineStats() != null) {
+            getSearchPipelineStats().toXContent(builder, params);
+        }
+        if (getResourceUsageStats() != null) {
+            getResourceUsageStats().toXContent(builder, params);
+        }
+        if (getSegmentReplicationRejectionStats() != null) {
+            getSegmentReplicationRejectionStats().toXContent(builder, params);
+        }
+
+        if (getRepositoriesStats() != null) {
+            getRepositoriesStats().toXContent(builder, params);
+        }
+        if (getAdmissionControlStats() != null) {
+            getAdmissionControlStats().toXContent(builder, params);
+        }
+        if (getNodeCacheStats() != null) {
+            getNodeCacheStats().toXContent(builder, params);
+        }
+        if (getRemoteStoreNodeStats() != null) {
+            getRemoteStoreNodeStats().toXContent(builder, params);
         }
         return builder;
     }

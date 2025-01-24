@@ -45,14 +45,16 @@ import org.apache.lucene.search.BooleanClause;
 import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.ConstantScoreQuery;
 import org.apache.lucene.search.DisjunctionMaxQuery;
+import org.apache.lucene.search.FieldExistsQuery;
 import org.apache.lucene.search.MatchNoDocsQuery;
 import org.apache.lucene.search.MultiPhraseQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.SynonymQuery;
 import org.apache.lucene.search.TermQuery;
-import org.opensearch.common.Strings;
 import org.opensearch.common.lucene.search.MultiPhrasePrefixQuery;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.index.IndexSettings;
 import org.opensearch.index.analysis.AnalyzerScope;
 import org.opensearch.index.analysis.IndexAnalyzers;
@@ -67,6 +69,7 @@ import org.opensearch.index.query.MatchPhrasePrefixQueryBuilder;
 import org.opensearch.index.query.MatchPhraseQueryBuilder;
 import org.opensearch.index.query.MultiMatchQueryBuilder;
 import org.opensearch.index.query.QueryShardContext;
+import org.opensearch.index.query.QueryStringQueryBuilder;
 import org.opensearch.plugins.Plugin;
 
 import java.io.IOException;
@@ -75,6 +78,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -133,7 +137,7 @@ public class SearchAsYouTypeFieldMapperTests extends MapperTestCase {
 
     @Override
     protected Collection<? extends Plugin> getPlugins() {
-        return org.opensearch.common.collect.List.of(new MapperExtrasModulePlugin());
+        return List.of(new MapperExtrasModulePlugin());
     }
 
     @Override
@@ -149,20 +153,9 @@ public class SearchAsYouTypeFieldMapperTests extends MapperTestCase {
         NamedAnalyzer simple = new NamedAnalyzer("simple", AnalyzerScope.INDEX, new SimpleAnalyzer());
         NamedAnalyzer whitespace = new NamedAnalyzer("whitespace", AnalyzerScope.INDEX, new WhitespaceAnalyzer());
         return new IndexAnalyzers(
-            org.opensearch.common.collect.Map.of(
-                "default",
-                dflt,
-                "standard",
-                standard,
-                "keyword",
-                keyword,
-                "simple",
-                simple,
-                "whitespace",
-                whitespace
-            ),
-            org.opensearch.common.collect.Map.of(),
-            org.opensearch.common.collect.Map.of()
+            Map.of("default", dflt, "standard", standard, "keyword", keyword, "simple", simple, "whitespace", whitespace),
+            Map.of(),
+            Map.of()
         );
     }
 
@@ -303,6 +296,20 @@ public class SearchAsYouTypeFieldMapperTests extends MapperTestCase {
             assertEquals(1, indexFields.length);
             assertEquals("new york city", indexFields[0].stringValue());
         }
+    }
+
+    public void testSubField() throws IOException {
+        MapperService mapperService = createMapperService(
+            fieldMapping(
+                b -> b.field("type", "search_as_you_type")
+                    .startObject("fields")
+                    .startObject("subField")
+                    .field("type", "keyword")
+                    .endObject()
+                    .endObject()
+            )
+        );
+        assertThat(mapperService.fieldType("field.subField"), instanceOf(KeywordFieldMapper.KeywordFieldType.class));
     }
 
     public void testIndexOptions() throws IOException {
@@ -550,6 +557,31 @@ public class SearchAsYouTypeFieldMapperTests extends MapperTestCase {
         }
     }
 
+    public void testNestedExistsQuery() throws IOException {
+        MapperService mapperService = createMapperService(mapping(b -> {
+            b.startObject("field");
+            {
+                b.field("type", "object");
+                b.startObject("properties");
+                {
+                    b.startObject("nested_field");
+                    {
+                        b.field("type", "search_as_you_type");
+                    }
+                    b.endObject();
+                }
+                b.endObject();
+            }
+            b.endObject();
+        }));
+        QueryShardContext queryShardContext = createQueryShardContext(mapperService);
+        Query actual = new QueryStringQueryBuilder("field:*").toQuery(queryShardContext);
+        Query expected = new ConstantScoreQuery(
+            new BooleanQuery.Builder().add(new FieldExistsQuery("field.nested_field"), BooleanClause.Occur.SHOULD).build()
+        );
+        assertEquals(expected, actual);
+    }
+
     private static BooleanQuery buildBoolPrefixQuery(String shingleFieldName, String prefixFieldName, List<String> terms) {
         final BooleanQuery.Builder builder = new BooleanQuery.Builder();
         for (int i = 0; i < terms.size() - 1; i++) {
@@ -609,7 +641,7 @@ public class SearchAsYouTypeFieldMapperTests extends MapperTestCase {
             b.field("type", "search_as_you_type");
             b.field("analyzer", "simple");
         }));
-        String serialized = Strings.toString(ms.documentMapper());
+        String serialized = Strings.toString(MediaTypeRegistry.JSON, ms.documentMapper());
         assertEquals(
             serialized,
             "{\"_doc\":{\"properties\":{\"field\":"
@@ -617,7 +649,7 @@ public class SearchAsYouTypeFieldMapperTests extends MapperTestCase {
         );
 
         merge(ms, mapping(b -> {}));
-        assertEquals(serialized, Strings.toString(ms.documentMapper()));
+        assertEquals(serialized, Strings.toString(MediaTypeRegistry.JSON, ms.documentMapper()));
     }
 
     private void documentParsingTestCase(Collection<String> values) throws IOException {

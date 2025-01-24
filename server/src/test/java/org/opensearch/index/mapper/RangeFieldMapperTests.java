@@ -36,11 +36,11 @@ import org.apache.lucene.document.InetAddressPoint;
 import org.apache.lucene.index.DocValuesType;
 import org.apache.lucene.index.IndexableField;
 import org.opensearch.common.CheckedConsumer;
-import org.opensearch.common.Strings;
 import org.opensearch.common.network.InetAddresses;
-import org.opensearch.common.xcontent.ToXContent;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.common.util.FeatureFlags;
 import org.opensearch.common.xcontent.XContentFactory;
+import org.opensearch.core.xcontent.ToXContent;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.index.mapper.MapperService.MergeReason;
 
 import java.io.IOException;
@@ -52,8 +52,10 @@ import static org.opensearch.index.query.RangeQueryBuilder.GTE_FIELD;
 import static org.opensearch.index.query.RangeQueryBuilder.GT_FIELD;
 import static org.opensearch.index.query.RangeQueryBuilder.LTE_FIELD;
 import static org.opensearch.index.query.RangeQueryBuilder.LT_FIELD;
+import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.Matchers.anyOf;
 import static org.hamcrest.Matchers.containsString;
+import static org.junit.Assume.assumeThat;
 
 public class RangeFieldMapperTests extends AbstractNumericFieldMapperTestCase {
     private static final String FROM_DATE = "2016-10-31";
@@ -68,12 +70,12 @@ public class RangeFieldMapperTests extends AbstractNumericFieldMapperTestCase {
 
     @Override
     protected Set<String> types() {
-        return org.opensearch.common.collect.Set.of("date_range", "ip_range", "float_range", "double_range", "integer_range", "long_range");
+        return Set.of("date_range", "ip_range", "float_range", "double_range", "integer_range", "long_range");
     }
 
     @Override
     protected Set<String> wholeTypes() {
-        return org.opensearch.common.collect.Set.of("integer_range", "long_range");
+        return Set.of("integer_range", "long_range");
     }
 
     @Override
@@ -97,7 +99,7 @@ public class RangeFieldMapperTests extends AbstractNumericFieldMapperTestCase {
 
     @Override
     protected void assertParseMaximalWarnings() {
-        assertWarnings("Parameter [boost] on field [field] is deprecated and will be removed in 8.0");
+        assertWarnings("Parameter [boost] on field [field] is deprecated and will be removed in 3.0");
     }
 
     protected void registerParameters(ParameterChecker checker) throws IOException {
@@ -161,7 +163,7 @@ public class RangeFieldMapperTests extends AbstractNumericFieldMapperTestCase {
     public void doTestDefaults(String type) throws Exception {
         XContentBuilder mapping = rangeFieldMapping(type, b -> {});
         DocumentMapper mapper = createDocumentMapper(mapping);
-        assertEquals(Strings.toString(mapping), mapper.mappingSource().toString());
+        assertEquals(mapping.toString(), mapper.mappingSource().toString());
 
         ParsedDocument doc = mapper.parse(
             source(b -> b.startObject("field").field(getFromField(), getFrom(type)).field(getToField(), getTo(type)).endObject())
@@ -352,17 +354,45 @@ public class RangeFieldMapperTests extends AbstractNumericFieldMapperTestCase {
         assertThat(e.getMessage(), containsString("should not define a dateTimeFormatter"));
     }
 
-    public void testSerializeDefaults() throws Exception {
+    public void testSerializeDefaultsLegacy() throws Exception {
+        assumeThat("Using legacy datetime format as default", FeatureFlags.isEnabled(FeatureFlags.DATETIME_FORMATTER_CACHING), is(false));
+
         for (String type : types()) {
             DocumentMapper docMapper = createDocumentMapper(fieldMapping(b -> b.field("type", type)));
             RangeFieldMapper mapper = (RangeFieldMapper) docMapper.root().getMapper("field");
             XContentBuilder builder = XContentFactory.jsonBuilder().startObject();
             mapper.doXContentBody(builder, true, ToXContent.EMPTY_PARAMS);
-            String got = Strings.toString(builder.endObject());
+            String got = builder.endObject().toString();
 
             // if type is date_range we check that the mapper contains the default format and locale
             // otherwise it should not contain a locale or format
             assertTrue(got, got.contains("\"format\":\"strict_date_optional_time||epoch_millis\"") == type.equals("date_range"));
+            assertTrue(got, got.contains("\"locale\":" + "\"" + Locale.ROOT + "\"") == type.equals("date_range"));
+        }
+    }
+
+    public void testSerializeDefaults() throws Exception {
+        assumeThat(
+            "Using experimental datetime format as default",
+            FeatureFlags.isEnabled(FeatureFlags.DATETIME_FORMATTER_CACHING),
+            is(true)
+        );
+
+        for (String type : types()) {
+            DocumentMapper docMapper = createDocumentMapper(fieldMapping(b -> b.field("type", type)));
+            RangeFieldMapper mapper = (RangeFieldMapper) docMapper.root().getMapper("field");
+            XContentBuilder builder = XContentFactory.jsonBuilder().startObject();
+            mapper.doXContentBody(builder, true, ToXContent.EMPTY_PARAMS);
+            String got = builder.endObject().toString();
+
+            // if type is date_range we check that the mapper contains the default format and locale
+            // otherwise it should not contain a locale or format
+            assertTrue(
+                got,
+                got.contains("\"format\":\"strict_date_time_no_millis||strict_date_optional_time||epoch_millis\"") == type.equals(
+                    "date_range"
+                )
+            );
             assertTrue(got, got.contains("\"locale\":" + "\"" + Locale.ROOT + "\"") == type.equals("date_range"));
         }
     }

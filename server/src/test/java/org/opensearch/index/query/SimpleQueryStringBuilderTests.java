@@ -32,7 +32,6 @@
 
 package org.opensearch.index.query;
 
-import org.apache.lucene.tests.analysis.MockSynonymAnalyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.queries.spans.SpanNearQuery;
@@ -45,11 +44,13 @@ import org.apache.lucene.search.BoostQuery;
 import org.apache.lucene.search.DisjunctionMaxQuery;
 import org.apache.lucene.search.FuzzyQuery;
 import org.apache.lucene.search.MatchNoDocsQuery;
+import org.apache.lucene.search.MultiTermQuery;
 import org.apache.lucene.search.PhraseQuery;
 import org.apache.lucene.search.PrefixQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.SynonymQuery;
 import org.apache.lucene.search.TermQuery;
+import org.apache.lucene.tests.analysis.MockSynonymAnalyzer;
 import org.apache.lucene.tests.util.TestUtil;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.common.settings.Settings;
@@ -343,7 +344,7 @@ public class SimpleQueryStringBuilderTests extends AbstractQueryTestCase<SimpleQ
     private static int shouldClauses(BooleanQuery query) {
         int result = 0;
         for (BooleanClause c : query.clauses()) {
-            if (c.getOccur() == BooleanClause.Occur.SHOULD) {
+            if (c.occur() == BooleanClause.Occur.SHOULD) {
                 result++;
             }
         }
@@ -451,9 +452,9 @@ public class SimpleQueryStringBuilderTests extends AbstractQueryTestCase<SimpleQ
     public void testExpandedTerms() throws Exception {
         // Prefix
         Query query = new SimpleQueryStringBuilder("aBc*").field(TEXT_FIELD_NAME).analyzer("whitespace").toQuery(createShardContext());
-        assertEquals(new PrefixQuery(new Term(TEXT_FIELD_NAME, "aBc")), query);
+        assertEquals(new PrefixQuery(new Term(TEXT_FIELD_NAME, "aBc"), MultiTermQuery.CONSTANT_SCORE_BLENDED_REWRITE), query);
         query = new SimpleQueryStringBuilder("aBc*").field(TEXT_FIELD_NAME).analyzer("standard").toQuery(createShardContext());
-        assertEquals(new PrefixQuery(new Term(TEXT_FIELD_NAME, "abc")), query);
+        assertEquals(new PrefixQuery(new Term(TEXT_FIELD_NAME, "abc"), MultiTermQuery.CONSTANT_SCORE_BLENDED_REWRITE), query);
 
         // Fuzzy
         query = new SimpleQueryStringBuilder("aBc~1").field(TEXT_FIELD_NAME).analyzer("whitespace").toQuery(createShardContext());
@@ -702,7 +703,7 @@ public class SimpleQueryStringBuilderTests extends AbstractQueryTestCase<SimpleQ
             .fuzzyMaxExpansions(5)
             .fuzzyTranspositions(false)
             .toQuery(createShardContext());
-        FuzzyQuery expected = new FuzzyQuery(new Term(TEXT_FIELD_NAME, "text"), 2, 2, 5, false);
+        FuzzyQuery expected = new FuzzyQuery(new Term(TEXT_FIELD_NAME, "text"), 2, 2, 5, false, FuzzyQuery.defaultRewriteMethod(5));
         assertEquals(expected, query);
     }
 
@@ -712,8 +713,12 @@ public class SimpleQueryStringBuilderTests extends AbstractQueryTestCase<SimpleQ
             .lenient(true)
             .toQuery(createShardContext());
         List<Query> expectedQueries = new ArrayList<>();
-        expectedQueries.add(new MatchNoDocsQuery(""));
-        expectedQueries.add(new PrefixQuery(new Term(TEXT_FIELD_NAME, "t")));
+        expectedQueries.add(
+            new MatchNoDocsQuery(
+                "failed query, caused by Can only use prefix queries on keyword and text fields - not on [mapped_date] which is of type [date]"
+            )
+        );
+        expectedQueries.add(new PrefixQuery(new Term(TEXT_FIELD_NAME, "t"), MultiTermQuery.CONSTANT_SCORE_BLENDED_REWRITE));
         DisjunctionMaxQuery expected = new DisjunctionMaxQuery(expectedQueries, 1.0f);
         assertEquals(expected, query);
     }
@@ -766,7 +771,7 @@ public class SimpleQueryStringBuilderTests extends AbstractQueryTestCase<SimpleQ
     public void testWithPrefixStopWords() throws Exception {
         Query query = new SimpleQueryStringBuilder("the* quick fox").field(TEXT_FIELD_NAME).analyzer("stop").toQuery(createShardContext());
         BooleanQuery expected = new BooleanQuery.Builder().add(
-            new PrefixQuery(new Term(TEXT_FIELD_NAME, "the")),
+            new PrefixQuery(new Term(TEXT_FIELD_NAME, "the"), MultiTermQuery.CONSTANT_SCORE_BLENDED_REWRITE),
             BooleanClause.Occur.SHOULD
         )
             .add(new TermQuery(new Term(TEXT_FIELD_NAME, "quick")), BooleanClause.Occur.SHOULD)

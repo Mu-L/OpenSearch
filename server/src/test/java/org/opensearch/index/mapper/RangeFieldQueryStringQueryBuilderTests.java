@@ -44,19 +44,24 @@ import org.apache.lucene.search.IndexOrDocValuesQuery;
 import org.apache.lucene.search.PointRangeQuery;
 import org.apache.lucene.search.Query;
 import org.opensearch.action.admin.indices.mapping.put.PutMappingRequest;
-import org.opensearch.common.Strings;
 import org.opensearch.common.compress.CompressedXContent;
 import org.opensearch.common.network.InetAddresses;
 import org.opensearch.common.time.DateMathParser;
+import org.opensearch.common.util.FeatureFlags;
 import org.opensearch.index.query.QueryShardContext;
 import org.opensearch.index.query.QueryStringQueryBuilder;
+import org.opensearch.search.approximate.ApproximatePointRangeQuery;
+import org.opensearch.search.approximate.ApproximateScoreQuery;
 import org.opensearch.test.AbstractQueryTestCase;
 
 import java.io.IOException;
 import java.net.InetAddress;
 
+import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.Matchers.either;
 import static org.hamcrest.core.IsInstanceOf.instanceOf;
+import static org.apache.lucene.document.LongPoint.pack;
+import static org.junit.Assume.assumeThat;
 
 public class RangeFieldQueryStringQueryBuilderTests extends AbstractQueryTestCase<QueryStringQueryBuilder> {
 
@@ -72,22 +77,20 @@ public class RangeFieldQueryStringQueryBuilderTests extends AbstractQueryTestCas
         mapperService.merge(
             "_doc",
             new CompressedXContent(
-                Strings.toString(
-                    PutMappingRequest.simpleMapping(
-                        INTEGER_RANGE_FIELD_NAME,
-                        "type=integer_range",
-                        LONG_RANGE_FIELD_NAME,
-                        "type=long_range",
-                        FLOAT_RANGE_FIELD_NAME,
-                        "type=float_range",
-                        DOUBLE_RANGE_FIELD_NAME,
-                        "type=double_range",
-                        DATE_RANGE_FIELD_NAME,
-                        "type=date_range",
-                        IP_RANGE_FIELD_NAME,
-                        "type=ip_range"
-                    )
-                )
+                PutMappingRequest.simpleMapping(
+                    INTEGER_RANGE_FIELD_NAME,
+                    "type=integer_range",
+                    LONG_RANGE_FIELD_NAME,
+                    "type=long_range",
+                    FLOAT_RANGE_FIELD_NAME,
+                    "type=float_range",
+                    DOUBLE_RANGE_FIELD_NAME,
+                    "type=double_range",
+                    DATE_RANGE_FIELD_NAME,
+                    "type=date_range",
+                    IP_RANGE_FIELD_NAME,
+                    "type=ip_range"
+                ).toString()
             ),
             MapperService.MergeReason.MAPPING_UPDATE
         );
@@ -176,18 +179,41 @@ public class RangeFieldQueryStringQueryBuilderTests extends AbstractQueryTestCas
         DateFieldMapper.DateFieldType dateType = (DateFieldMapper.DateFieldType) context.fieldMapper(DATE_FIELD_NAME);
         parser = dateType.dateMathParser;
         Query queryOnDateField = new QueryStringQueryBuilder(DATE_FIELD_NAME + ":[2010-01-01 TO 2018-01-01]").toQuery(createShardContext());
-        Query controlQuery = LongPoint.newRangeQuery(
-            DATE_FIELD_NAME,
-            new long[] { parser.parse(lowerBoundExact, () -> 0).toEpochMilli() },
-            new long[] { parser.parse(upperBoundExact, () -> 0).toEpochMilli() }
-        );
 
         Query controlDv = SortedNumericDocValuesField.newSlowRangeQuery(
             DATE_FIELD_NAME,
             parser.parse(lowerBoundExact, () -> 0).toEpochMilli(),
             parser.parse(upperBoundExact, () -> 0).toEpochMilli()
         );
-        assertEquals(new IndexOrDocValuesQuery(controlQuery, controlDv), queryOnDateField);
+        assumeThat(
+            "Using Approximate Range Query as default",
+            FeatureFlags.isEnabled(FeatureFlags.APPROXIMATE_POINT_RANGE_QUERY),
+            is(true)
+        );
+        assertEquals(
+            new ApproximateScoreQuery(
+                new IndexOrDocValuesQuery(
+                    LongPoint.newRangeQuery(
+                        DATE_FIELD_NAME,
+                        parser.parse(lowerBoundExact, () -> 0).toEpochMilli(),
+                        parser.parse(upperBoundExact, () -> 0).toEpochMilli()
+                    ),
+                    controlDv
+                ),
+                new ApproximatePointRangeQuery(
+                    DATE_FIELD_NAME,
+                    pack(new long[] { parser.parse(lowerBoundExact, () -> 0).toEpochMilli() }).bytes,
+                    pack(new long[] { parser.parse(upperBoundExact, () -> 0).toEpochMilli() }).bytes,
+                    new long[] { parser.parse(lowerBoundExact, () -> 0).toEpochMilli() }.length
+                ) {
+                    @Override
+                    protected String toString(int dimension, byte[] value) {
+                        return Long.toString(LongPoint.decodeDimension(value, 0));
+                    }
+                }
+            ),
+            queryOnDateField
+        );
     }
 
     public void testIPRangeQuery() throws Exception {

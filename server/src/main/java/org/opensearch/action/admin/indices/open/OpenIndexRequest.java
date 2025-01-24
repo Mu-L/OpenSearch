@@ -36,25 +36,29 @@ import org.opensearch.action.ActionRequestValidationException;
 import org.opensearch.action.IndicesRequest;
 import org.opensearch.action.support.ActiveShardCount;
 import org.opensearch.action.support.IndicesOptions;
-import org.opensearch.action.support.master.AcknowledgedRequest;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.util.CollectionUtils;
+import org.opensearch.action.support.clustermanager.AcknowledgedRequest;
+import org.opensearch.common.annotation.PublicApi;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.util.CollectionUtils;
 
 import java.io.IOException;
+import java.util.Arrays;
 
 import static org.opensearch.action.ValidateActions.addValidationError;
 
 /**
  * A request to open an index.
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class OpenIndexRequest extends AcknowledgedRequest<OpenIndexRequest> implements IndicesRequest.Replaceable {
 
     private String[] indices;
     private IndicesOptions indicesOptions = IndicesOptions.fromOptions(false, true, false, true);
     private ActiveShardCount waitForActiveShards = ActiveShardCount.DEFAULT;
+    private boolean shouldStoreResult;
 
     public OpenIndexRequest(StreamInput in) throws IOException {
         super(in);
@@ -161,11 +165,33 @@ public class OpenIndexRequest extends AcknowledgedRequest<OpenIndexRequest> impl
         return waitForActiveShards(ActiveShardCount.from(waitForActiveShards));
     }
 
+    /**
+     * Should this task store its result after it has finished?
+     */
+    public void setShouldStoreResult(boolean shouldStoreResult) {
+        this.shouldStoreResult = shouldStoreResult;
+    }
+
+    @Override
+    public boolean getShouldStoreResult() {
+        return shouldStoreResult;
+    }
+
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         super.writeTo(out);
         out.writeStringArray(indices);
         indicesOptions.writeIndicesOptions(out);
         waitForActiveShards.writeTo(out);
+    }
+
+    @Override
+    public String toString() {
+        return "open indices " + Arrays.toString(indices());
+    }
+
+    @Override
+    public String getDescription() {
+        return this.toString();
     }
 }

@@ -32,9 +32,9 @@
 package org.opensearch.cluster.coordination;
 
 import org.opensearch.cluster.node.DiscoveryNode;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.io.stream.Writeable;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.Writeable;
 
 import java.io.IOException;
 
@@ -78,8 +78,8 @@ public class Join implements Writeable {
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
-        sourceNode.writeTo(out);
-        targetNode.writeTo(out);
+        sourceNode.writeToWithAttribute(out);
+        targetNode.writeToWithAttribute(out);
         out.writeLong(term);
         out.writeLong(lastAcceptedTerm);
         out.writeLong(lastAcceptedVersion);

@@ -45,9 +45,12 @@ import org.opensearch.common.settings.Settings;
 import org.opensearch.common.settings.SettingsFilter;
 import org.opensearch.common.settings.SettingsModule;
 import org.opensearch.common.util.concurrent.ThreadContext;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.action.ActionResponse;
+import org.opensearch.extensions.ExtensionsManager;
+import org.opensearch.identity.IdentityService;
 import org.opensearch.plugins.ActionPlugin;
 import org.opensearch.plugins.ActionPlugin.ActionHandler;
-
 import org.opensearch.rest.RestChannel;
 import org.opensearch.rest.RestController;
 import org.opensearch.rest.RestHandler;
@@ -62,13 +65,16 @@ import org.opensearch.threadpool.ThreadPool;
 import org.opensearch.usage.UsageService;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Supplier;
 
 import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
 import static org.hamcrest.Matchers.hasEntry;
 import static org.hamcrest.Matchers.startsWith;
+import static org.mockito.Mockito.mock;
 
 public class ActionModuleTests extends OpenSearchTestCase {
     public void testSetupActionsContainsKnownBuiltin() {
@@ -122,7 +128,7 @@ public class ActionModuleTests extends OpenSearchTestCase {
         );
     }
 
-    public void testSetupRestHandlerContainsKnownBuiltin() {
+    public void testSetupRestHandlerContainsKnownBuiltin() throws IOException {
         SettingsModule settings = new SettingsModule(Settings.EMPTY);
         UsageService usageService = new UsageService();
         ActionModule actionModule = new ActionModule(
@@ -136,7 +142,9 @@ public class ActionModuleTests extends OpenSearchTestCase {
             null,
             null,
             usageService,
-            null
+            null,
+            new IdentityService(Settings.EMPTY, mock(ThreadPool.class), new ArrayList<>()),
+            new ExtensionsManager(Set.of(), new IdentityService(Settings.EMPTY, mock(ThreadPool.class), List.of()))
         );
         actionModule.initRestHandlers(null);
         // At this point the easiest way to confirm that a handler is loaded is to try to register another one on top of it and to fail
@@ -192,6 +200,8 @@ public class ActionModuleTests extends OpenSearchTestCase {
                 null,
                 null,
                 usageService,
+                null,
+                null,
                 null
             );
             Exception e = expectThrows(IllegalArgumentException.class, () -> actionModule.initRestHandlers(null));
@@ -241,6 +251,8 @@ public class ActionModuleTests extends OpenSearchTestCase {
                 null,
                 null,
                 usageService,
+                null,
+                null,
                 null
             );
             actionModule.initRestHandlers(null);

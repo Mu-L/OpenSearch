@@ -32,16 +32,16 @@
 
 package org.opensearch.search.aggregations.bucket;
 
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentFactory;
-import org.opensearch.common.xcontent.XContentParser;
 import org.opensearch.common.xcontent.XContentType;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
+import org.opensearch.index.query.BaseQueryRewriteContext;
 import org.opensearch.index.query.BoolQueryBuilder;
 import org.opensearch.index.query.MatchAllQueryBuilder;
 import org.opensearch.index.query.MatchNoneQueryBuilder;
 import org.opensearch.index.query.QueryBuilder;
 import org.opensearch.index.query.QueryBuilders;
-import org.opensearch.index.query.QueryRewriteContext;
 import org.opensearch.search.aggregations.AggregationBuilder;
 import org.opensearch.search.aggregations.BaseAggregationTestCase;
 import org.opensearch.search.aggregations.bucket.filter.FiltersAggregationBuilder;
@@ -106,7 +106,7 @@ public class FiltersTests extends BaseAggregationTestCase<FiltersAggregationBuil
     }
 
     public void testOtherBucket() throws IOException {
-        XContentBuilder builder = XContentFactory.contentBuilder(randomFrom(XContentType.values()));
+        XContentBuilder builder = MediaTypeRegistry.contentBuilder(randomFrom(XContentType.values()));
         builder.startObject();
         builder.startArray("filters").startObject().startObject("term").field("field", "foo").endObject().endObject().endArray();
         builder.endObject();
@@ -116,7 +116,7 @@ public class FiltersTests extends BaseAggregationTestCase<FiltersAggregationBuil
             // The other bucket is disabled by default
             assertFalse(filters.otherBucket());
 
-            builder = XContentFactory.contentBuilder(randomFrom(XContentType.values()));
+            builder = MediaTypeRegistry.contentBuilder(randomFrom(XContentType.values()));
             builder.startObject();
             builder.startArray("filters").startObject().startObject("term").field("field", "foo").endObject().endObject().endArray();
             builder.field("other_bucket_key", "some_key");
@@ -128,7 +128,7 @@ public class FiltersTests extends BaseAggregationTestCase<FiltersAggregationBuil
             // but setting a key enables it automatically
             assertTrue(filters.otherBucket());
 
-            builder = XContentFactory.contentBuilder(randomFrom(XContentType.values()));
+            builder = MediaTypeRegistry.contentBuilder(randomFrom(XContentType.values()));
             builder.startObject();
             builder.startArray("filters").startObject().startObject("term").field("field", "foo").endObject().endObject().endArray();
             builder.field("other_bucket", false);
@@ -147,12 +147,12 @@ public class FiltersTests extends BaseAggregationTestCase<FiltersAggregationBuil
         // test non-keyed filter that doesn't rewrite
         AggregationBuilder original = new FiltersAggregationBuilder("my-agg", new MatchAllQueryBuilder());
         original.setMetadata(Collections.singletonMap(randomAlphaOfLengthBetween(1, 20), randomAlphaOfLengthBetween(1, 20)));
-        AggregationBuilder rewritten = original.rewrite(new QueryRewriteContext(xContentRegistry(), null, null, () -> 0L));
+        AggregationBuilder rewritten = original.rewrite(new BaseQueryRewriteContext(xContentRegistry(), null, null, () -> 0L));
         assertSame(original, rewritten);
 
         // test non-keyed filter that does rewrite
         original = new FiltersAggregationBuilder("my-agg", new BoolQueryBuilder());
-        rewritten = original.rewrite(new QueryRewriteContext(xContentRegistry(), null, null, () -> 0L));
+        rewritten = original.rewrite(new BaseQueryRewriteContext(xContentRegistry(), null, null, () -> 0L));
         assertNotSame(original, rewritten);
         assertThat(rewritten, instanceOf(FiltersAggregationBuilder.class));
         assertEquals("my-agg", ((FiltersAggregationBuilder) rewritten).getName());
@@ -163,12 +163,12 @@ public class FiltersTests extends BaseAggregationTestCase<FiltersAggregationBuil
 
         // test keyed filter that doesn't rewrite
         original = new FiltersAggregationBuilder("my-agg", new KeyedFilter("my-filter", new MatchAllQueryBuilder()));
-        rewritten = original.rewrite(new QueryRewriteContext(xContentRegistry(), null, null, () -> 0L));
+        rewritten = original.rewrite(new BaseQueryRewriteContext(xContentRegistry(), null, null, () -> 0L));
         assertSame(original, rewritten);
 
         // test non-keyed filter that does rewrite
         original = new FiltersAggregationBuilder("my-agg", new KeyedFilter("my-filter", new BoolQueryBuilder()));
-        rewritten = original.rewrite(new QueryRewriteContext(xContentRegistry(), null, null, () -> 0L));
+        rewritten = original.rewrite(new BaseQueryRewriteContext(xContentRegistry(), null, null, () -> 0L));
         assertNotSame(original, rewritten);
         assertThat(rewritten, instanceOf(FiltersAggregationBuilder.class));
         assertEquals("my-agg", ((FiltersAggregationBuilder) rewritten).getName());
@@ -180,7 +180,7 @@ public class FiltersTests extends BaseAggregationTestCase<FiltersAggregationBuil
         // test sub-agg filter that does rewrite
         original = new TermsAggregationBuilder("terms").userValueTypeHint(ValueType.BOOLEAN)
             .subAggregation(new FiltersAggregationBuilder("my-agg", new KeyedFilter("my-filter", new BoolQueryBuilder())));
-        rewritten = original.rewrite(new QueryRewriteContext(xContentRegistry(), null, null, () -> 0L));
+        rewritten = original.rewrite(new BaseQueryRewriteContext(xContentRegistry(), null, null, () -> 0L));
         assertNotSame(original, rewritten);
         assertNotEquals(original, rewritten);
         assertThat(rewritten, instanceOf(TermsAggregationBuilder.class));
@@ -189,7 +189,7 @@ public class FiltersTests extends BaseAggregationTestCase<FiltersAggregationBuil
         assertThat(subAgg, instanceOf(FiltersAggregationBuilder.class));
         assertNotSame(original.getSubAggregations().iterator().next(), subAgg);
         assertEquals("my-agg", subAgg.getName());
-        assertSame(rewritten, rewritten.rewrite(new QueryRewriteContext(xContentRegistry(), null, null, () -> 0L)));
+        assertSame(rewritten, rewritten.rewrite(new BaseQueryRewriteContext(xContentRegistry(), null, null, () -> 0L)));
     }
 
     public void testRewritePreservesOtherBucket() throws IOException {
@@ -197,7 +197,7 @@ public class FiltersTests extends BaseAggregationTestCase<FiltersAggregationBuil
         originalFilters.otherBucket(randomBoolean());
         originalFilters.otherBucketKey(randomAlphaOfLength(10));
 
-        AggregationBuilder rewritten = originalFilters.rewrite(new QueryRewriteContext(xContentRegistry(), null, null, () -> 0L));
+        AggregationBuilder rewritten = originalFilters.rewrite(new BaseQueryRewriteContext(xContentRegistry(), null, null, () -> 0L));
         assertThat(rewritten, instanceOf(FiltersAggregationBuilder.class));
 
         FiltersAggregationBuilder rewrittenFilters = (FiltersAggregationBuilder) rewritten;
@@ -207,7 +207,7 @@ public class FiltersTests extends BaseAggregationTestCase<FiltersAggregationBuil
 
     public void testEmptyFilters() throws IOException {
         {
-            XContentBuilder builder = XContentFactory.contentBuilder(randomFrom(XContentType.values()));
+            XContentBuilder builder = MediaTypeRegistry.contentBuilder(randomFrom(XContentType.values()));
             builder.startObject();
             builder.startArray("filters").endArray();  // unkeyed array
             builder.endObject();
@@ -221,7 +221,7 @@ public class FiltersTests extends BaseAggregationTestCase<FiltersAggregationBuil
         }
 
         {
-            XContentBuilder builder = XContentFactory.contentBuilder(randomFrom(XContentType.values()));
+            XContentBuilder builder = MediaTypeRegistry.contentBuilder(randomFrom(XContentType.values()));
             builder.startObject();
             builder.startObject("filters").endObject(); // keyed object
             builder.endObject();

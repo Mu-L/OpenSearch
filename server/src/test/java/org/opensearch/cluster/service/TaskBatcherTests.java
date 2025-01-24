@@ -55,6 +55,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Semaphore;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.hamcrest.Matchers.containsString;
@@ -78,7 +79,7 @@ public class TaskBatcherTests extends TaskExecutorTests {
         }
 
         @Override
-        protected void run(Object batchingKey, List<? extends BatchedTask> tasks, String tasksSummary) {
+        protected void run(Object batchingKey, List<? extends BatchedTask> tasks, Function<Boolean, String> taskSummaryGenerator) {
             List<UpdateTask> updateTasks = (List) tasks;
             ((TestExecutor) batchingKey).execute(updateTasks.stream().map(t -> t.task).collect(Collectors.toList()));
             updateTasks.forEach(updateTask -> updateTask.listener.processed(updateTask.source));
@@ -218,7 +219,8 @@ public class TaskBatcherTests extends TaskExecutorTests {
             executors[i] = new TaskExecutor();
         }
 
-        int tasksSubmittedPerThread = randomIntBetween(2, 1024);
+        // it will create at most 8192 threads, which will cause native memory oom. so we limit the number of created threads.
+        int tasksSubmittedPerThread = randomIntBetween(2, 128);
 
         CopyOnWriteArrayList<Tuple<String, Throwable>> failures = new CopyOnWriteArrayList<>();
         CountDownLatch updateLatch = new CountDownLatch(numberOfThreads * tasksSubmittedPerThread);
@@ -279,6 +281,87 @@ public class TaskBatcherTests extends TaskExecutorTests {
         }
     }
 
+    public void testNoTasksAreDroppedInParallelSubmission() throws BrokenBarrierException, InterruptedException {
+        int numberOfThreads = randomIntBetween(2, 8);
+        TaskExecutor[] executors = new TaskExecutor[numberOfThreads];
+        for (int i = 0; i < numberOfThreads; i++) {
+            executors[i] = new TaskExecutor();
+        }
+
+        int tasksSubmittedPerThread = randomIntBetween(2, 128);
+
+        CopyOnWriteArrayList<Tuple<String, Throwable>> failures = new CopyOnWriteArrayList<>();
+        CountDownLatch updateLatch = new CountDownLatch(numberOfThreads * tasksSubmittedPerThread);
+
+        final TestListener listener = new TestListener() {
+            @Override
+            public void onFailure(String source, Exception e) {
+                logger.error(() -> new ParameterizedMessage("unexpected failure: [{}]", source), e);
+                failures.add(new Tuple<>(source, e));
+                updateLatch.countDown();
+            }
+
+            @Override
+            public void processed(String source) {
+                updateLatch.countDown();
+            }
+        };
+
+        CyclicBarrier barrier = new CyclicBarrier(1 + numberOfThreads);
+
+        for (int i = 0; i < numberOfThreads; i++) {
+            final int index = i;
+            Thread thread = new Thread(() -> {
+                try {
+                    barrier.await();
+                    CyclicBarrier tasksBarrier = new CyclicBarrier(1 + tasksSubmittedPerThread);
+                    for (int j = 0; j < tasksSubmittedPerThread; j++) {
+                        int taskNumber = j;
+                        Thread taskThread = new Thread(() -> {
+                            try {
+                                tasksBarrier.await();
+                                submitTask(
+                                    "[" + index + "][" + taskNumber + "]",
+                                    taskNumber,
+                                    ClusterStateTaskConfig.build(randomFrom(Priority.values())),
+                                    executors[index],
+                                    listener
+                                );
+                                tasksBarrier.await();
+                            } catch (InterruptedException | BrokenBarrierException e) {
+                                throw new AssertionError(e);
+                            }
+                        });
+                        // submit tasks per batchingKey in parallel
+                        taskThread.start();
+                    }
+                    // wait for all task threads to be ready
+                    tasksBarrier.await();
+                    // wait for all task threads to finish
+                    tasksBarrier.await();
+                    barrier.await();
+                } catch (InterruptedException | BrokenBarrierException e) {
+                    throw new AssertionError(e);
+                }
+            });
+            thread.start();
+        }
+
+        // wait for all executor threads to be ready
+        barrier.await();
+        // wait for all executor threads to finish
+        barrier.await();
+
+        updateLatch.await();
+
+        assertThat(failures, empty());
+
+        for (int i = 0; i < numberOfThreads; i++) {
+            // assert that total executed tasks is same for every executor as we initiated
+            assertEquals(tasksSubmittedPerThread, executors[i].tasks.size());
+        }
+    }
+
     public void testSingleBatchSubmission() throws InterruptedException {
         Map<Integer, TestListener> tasks = new HashMap<>();
         final int numOfTasks = randomInt(10);
@@ -316,7 +399,7 @@ public class TaskBatcherTests extends TaskExecutorTests {
             submitTask("blocking", blockingTask);
 
             TestExecutor<SimpleTask> executor = tasks -> {};
-            SimpleTask task = new SimpleTask(1);
+            SimpleTask task1 = new SimpleTask(1);
             TestListener listener = new TestListener() {
                 @Override
                 public void processed(String source) {
@@ -329,19 +412,108 @@ public class TaskBatcherTests extends TaskExecutorTests {
                 }
             };
 
-            submitTask("first time", task, ClusterStateTaskConfig.build(Priority.NORMAL), executor, listener);
+            submitTask("first time", task1, ClusterStateTaskConfig.build(Priority.NORMAL), executor, listener);
 
+            // submitting same task1 again, it should throw exception.
             final IllegalStateException e = expectThrows(
                 IllegalStateException.class,
-                () -> submitTask("second time", task, ClusterStateTaskConfig.build(Priority.NORMAL), executor, listener)
+                () -> submitTask("second time", task1, ClusterStateTaskConfig.build(Priority.NORMAL), executor, listener)
             );
             assertThat(e, hasToString(containsString("task [1] with source [second time] is already queued")));
 
-            submitTask("third time a charm", new SimpleTask(1), ClusterStateTaskConfig.build(Priority.NORMAL), executor, listener);
+            // inserting new task with same data, this should pass as it is new object and reference is different.
+            SimpleTask task2 = new SimpleTask(1);
+            // equals method returns true for both task
+            assertTrue(task1.equals(task2));
+            // references of both tasks are different.
+            assertFalse(task1 == task2);
+            // submitting this task should be allowed, as it is new object.
+            submitTask("third time a charm", task2, ClusterStateTaskConfig.build(Priority.NORMAL), executor, listener);
+
+            // submitting same task2 again, it should throw exception, since it was submitted last time
+            final IllegalStateException e2 = expectThrows(
+                IllegalStateException.class,
+                () -> submitTask("second time", task2, ClusterStateTaskConfig.build(Priority.NORMAL), executor, listener)
+            );
+            assertThat(e2, hasToString(containsString("task [1] with source [second time] is already queued")));
 
             assertThat(latch.getCount(), equalTo(2L));
         }
         latch.await();
+    }
+
+    public void testDuplicateSubmissionAfterTimeout() throws InterruptedException {
+        final CountDownLatch latch = new CountDownLatch(2);
+        final CountDownLatch timeOutLatch = new CountDownLatch(1);
+        try (BlockingTask blockingTask = new BlockingTask(Priority.IMMEDIATE)) {
+            submitTask("blocking", blockingTask);
+
+            TestExecutor<SimpleTask> executor = tasks -> {};
+            SimpleTask task1 = new SimpleTask(1);
+            TestListener listener = new TestListener() {
+                @Override
+                public void processed(String source) {
+                    latch.countDown();
+                }
+
+                @Override
+                public void onFailure(String source, Exception e) {
+                    if (e instanceof ProcessClusterEventTimeoutException) {
+                        timeOutLatch.countDown();
+                    } else {
+                        throw new AssertionError(e);
+                    }
+                }
+            };
+
+            submitTask("first time", task1, ClusterStateTaskConfig.build(Priority.NORMAL), executor, listener);
+            ArrayList<TaskBatcher.BatchedTask> tasks = new ArrayList();
+            tasks.add(
+                taskBatcher.new UpdateTask(
+                    ClusterStateTaskConfig.build(Priority.NORMAL).priority(), "first time", task1, listener, executor
+                )
+            );
+
+            // task1 got timed out, it will be removed from map.
+            taskBatcher.onTimeoutInternal(tasks, TimeValue.ZERO);
+            timeOutLatch.await(); // wait for task to get timeout
+            // submitting same task1 again, it should get submitted, since last task was timeout.
+            submitTask("first time", task1, ClusterStateTaskConfig.build(Priority.NORMAL), executor, listener);
+            assertThat(latch.getCount(), equalTo(2L));
+        }
+        latch.await();
+    }
+
+    public void testDuplicateSubmissionAfterExecution() throws InterruptedException {
+        final CountDownLatch firstTaskLatch = new CountDownLatch(1);
+        final CountDownLatch latch = new CountDownLatch(2);
+
+        TestExecutor<SimpleTask> executor = tasks -> {};
+        SimpleTask task1 = new SimpleTask(1);
+        TestListener listener = new TestListener() {
+            @Override
+            public void processed(String source) {
+                firstTaskLatch.countDown();
+                latch.countDown();
+            }
+
+            @Override
+            public void onFailure(String source, Exception e) {
+                if (e instanceof ProcessClusterEventTimeoutException) {
+                    latch.countDown();
+                } else {
+                    throw new AssertionError(e);
+                }
+            }
+        };
+        submitTask("first time", task1, ClusterStateTaskConfig.build(Priority.NORMAL), executor, listener);
+
+        firstTaskLatch.await(); // wait till task is not executed
+
+        // submitting same task1 again, it should get submitted, since last task was executed.
+        submitTask("first time", task1, ClusterStateTaskConfig.build(Priority.NORMAL), executor, listener);
+
+        latch.await(); // wait till all tasks are not completed.
     }
 
     protected static TaskBatcherListener getMockListener() {
@@ -377,12 +549,16 @@ public class TaskBatcherTests extends TaskExecutorTests {
 
         @Override
         public int hashCode() {
-            return super.hashCode();
+            return this.id;
         }
 
         @Override
         public boolean equals(Object obj) {
-            return super.equals(obj);
+            return ((SimpleTask) obj).getId() == this.id;
+        }
+
+        public int getId() {
+            return id;
         }
 
         @Override

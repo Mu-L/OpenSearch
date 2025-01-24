@@ -35,25 +35,28 @@ package org.opensearch.action.admin.indices.settings.put;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.message.ParameterizedMessage;
-import org.opensearch.action.ActionListener;
 import org.opensearch.action.support.ActionFilters;
-import org.opensearch.action.support.master.AcknowledgedResponse;
+import org.opensearch.action.support.clustermanager.AcknowledgedResponse;
 import org.opensearch.action.support.clustermanager.TransportClusterManagerNodeAction;
 import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.ack.ClusterStateUpdateResponse;
 import org.opensearch.cluster.block.ClusterBlockException;
 import org.opensearch.cluster.block.ClusterBlockLevel;
-import org.opensearch.cluster.metadata.IndexMetadata;
+import org.opensearch.cluster.block.ClusterBlocks;
 import org.opensearch.cluster.metadata.IndexNameExpressionResolver;
 import org.opensearch.cluster.metadata.MetadataUpdateSettingsService;
 import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.inject.Inject;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.index.Index;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.index.Index;
 import org.opensearch.threadpool.ThreadPool;
 import org.opensearch.transport.TransportService;
 
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.Set;
+import java.util.stream.Stream;
 
 /**
  * Transport action for updating index settings
@@ -63,6 +66,20 @@ import java.io.IOException;
 public class TransportUpdateSettingsAction extends TransportClusterManagerNodeAction<UpdateSettingsRequest, AcknowledgedResponse> {
 
     private static final Logger logger = LogManager.getLogger(TransportUpdateSettingsAction.class);
+
+    private final static Set<String> ALLOWLIST_REMOTE_SNAPSHOT_SETTINGS = Set.of(
+        "index.max_result_window",
+        "index.max_inner_result_window",
+        "index.max_rescore_window",
+        "index.max_docvalue_fields_search",
+        "index.max_script_fields",
+        "index.max_terms_count",
+        "index.max_regex_length",
+        "index.highlight.max_analyzed_offset",
+        "index.number_of_replicas"
+    );
+
+    private final static String[] ALLOWLIST_REMOTE_SNAPSHOT_SETTINGS_PREFIXES = { "index.search.slowlog", "index.routing.allocation" };
 
     private final MetadataUpdateSettingsService updateSettingsService;
 
@@ -101,13 +118,33 @@ public class TransportUpdateSettingsAction extends TransportClusterManagerNodeAc
             return globalBlock;
         }
         if (request.settings().size() == 1 &&  // we have to allow resetting these settings otherwise users can't unblock an index
-            IndexMetadata.INDEX_BLOCKS_METADATA_SETTING.exists(request.settings())
-            || IndexMetadata.INDEX_READ_ONLY_SETTING.exists(request.settings())
-            || IndexMetadata.INDEX_BLOCKS_READ_ONLY_ALLOW_DELETE_SETTING.exists(request.settings())) {
+            ClusterBlocks.INDEX_DATA_READ_ONLY_BLOCK_SETTINGS.stream()
+                .anyMatch(booleanSetting -> booleanSetting.exists(request.settings()))) {
             return null;
         }
-        return state.blocks()
-            .indicesBlockedException(ClusterBlockLevel.METADATA_WRITE, indexNameExpressionResolver.concreteIndexNames(state, request));
+
+        final Index[] requestIndices = indexNameExpressionResolver.concreteIndices(state, request);
+        boolean allowSearchableSnapshotSettingsUpdate = true;
+        // check if all indices in the request are remote snapshot
+        for (Index index : requestIndices) {
+            if (state.blocks().indexBlocked(ClusterBlockLevel.METADATA_WRITE, index.getName())) {
+                allowSearchableSnapshotSettingsUpdate = allowSearchableSnapshotSettingsUpdate
+                    && state.getMetadata().getIndexSafe(index).isRemoteSnapshot();
+            }
+        }
+        // check if all settings in the request are in the allow list
+        if (allowSearchableSnapshotSettingsUpdate) {
+            for (String setting : request.settings().keySet()) {
+                allowSearchableSnapshotSettingsUpdate = allowSearchableSnapshotSettingsUpdate
+                    && (ALLOWLIST_REMOTE_SNAPSHOT_SETTINGS.contains(setting)
+                        || Stream.of(ALLOWLIST_REMOTE_SNAPSHOT_SETTINGS_PREFIXES).anyMatch(setting::startsWith));
+            }
+        }
+
+        final String[] requestIndexNames = Arrays.stream(requestIndices).map(Index::getName).toArray(String[]::new);
+        return allowSearchableSnapshotSettingsUpdate
+            ? null
+            : state.blocks().indicesBlockedException(ClusterBlockLevel.METADATA_WRITE, requestIndexNames);
     }
 
     @Override

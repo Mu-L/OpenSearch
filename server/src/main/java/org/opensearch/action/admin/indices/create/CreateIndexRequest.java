@@ -41,22 +41,24 @@ import org.opensearch.action.admin.indices.alias.Alias;
 import org.opensearch.action.admin.indices.mapping.put.PutMappingRequest;
 import org.opensearch.action.support.ActiveShardCount;
 import org.opensearch.action.support.IndicesOptions;
-import org.opensearch.action.support.master.AcknowledgedRequest;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.Strings;
-import org.opensearch.common.bytes.BytesArray;
-import org.opensearch.common.bytes.BytesReference;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
+import org.opensearch.action.support.clustermanager.AcknowledgedRequest;
+import org.opensearch.cluster.metadata.Context;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.xcontent.DeprecationHandler;
 import org.opensearch.common.xcontent.LoggingDeprecationHandler;
-import org.opensearch.common.xcontent.NamedXContentRegistry;
-import org.opensearch.common.xcontent.XContentBuilder;
 import org.opensearch.common.xcontent.XContentFactory;
 import org.opensearch.common.xcontent.XContentHelper;
-import org.opensearch.common.xcontent.XContentParser;
 import org.opensearch.common.xcontent.XContentType;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.bytes.BytesArray;
+import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.xcontent.DeprecationHandler;
+import org.opensearch.core.xcontent.MediaType;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.mapper.MapperService;
 
 import java.io.IOException;
@@ -80,13 +82,15 @@ import static org.opensearch.common.settings.Settings.writeSettingsToStream;
  * @see org.opensearch.client.Requests#createIndexRequest(String)
  * @see CreateIndexResponse
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class CreateIndexRequest extends AcknowledgedRequest<CreateIndexRequest> implements IndicesRequest {
 
     public static final ParseField MAPPINGS = new ParseField("mappings");
     public static final ParseField SETTINGS = new ParseField("settings");
     public static final ParseField ALIASES = new ParseField("aliases");
+    public static final ParseField CONTEXT = new ParseField("context");
 
     private String cause = "";
 
@@ -97,6 +101,8 @@ public class CreateIndexRequest extends AcknowledgedRequest<CreateIndexRequest> 
     private String mappings = "{}";
 
     private final Set<Alias> aliases = new HashSet<>();
+
+    private Context context;
 
     private ActiveShardCount waitForActiveShards = ActiveShardCount.DEFAULT;
 
@@ -126,6 +132,9 @@ public class CreateIndexRequest extends AcknowledgedRequest<CreateIndexRequest> 
             aliases.add(new Alias(in));
         }
         waitForActiveShards = ActiveShardCount.readFrom(in);
+        if (in.getVersion().onOrAfter(Version.V_2_17_0)) {
+            context = in.readOptionalWriteable(Context::new);
+        }
     }
 
     public CreateIndexRequest() {}
@@ -208,9 +217,20 @@ public class CreateIndexRequest extends AcknowledgedRequest<CreateIndexRequest> 
 
     /**
      * The settings to create the index with (either json or yaml format)
+     *
+     * @deprecated use {@link #settings(String source, MediaType mediaType)} instead
      */
+    @Deprecated
     public CreateIndexRequest settings(String source, XContentType xContentType) {
         this.settings = Settings.builder().loadFromSource(source, xContentType).build();
+        return this;
+    }
+
+    /**
+     * The settings to create the index with (using a generic MediaType)
+     */
+    public CreateIndexRequest settings(String source, MediaType mediaType) {
+        this.settings = Settings.builder().loadFromSource(source, mediaType).build();
         return this;
     }
 
@@ -218,7 +238,7 @@ public class CreateIndexRequest extends AcknowledgedRequest<CreateIndexRequest> 
      * Allows to set the settings using a json builder.
      */
     public CreateIndexRequest settings(XContentBuilder builder) {
-        settings(Strings.toString(builder), builder.contentType());
+        settings(builder.toString(), builder.contentType());
         return this;
     }
 
@@ -232,7 +252,7 @@ public class CreateIndexRequest extends AcknowledgedRequest<CreateIndexRequest> 
 
     /**
      * Set the mapping for this index
-     *
+     * <p>
      * The mapping should be in the form of a JSON string, with an outer _doc key
      * <pre>
      *     .mapping("{\"_doc\":{\"properties\": ... }}")
@@ -248,9 +268,24 @@ public class CreateIndexRequest extends AcknowledgedRequest<CreateIndexRequest> 
      *
      * @param source The mapping source
      * @param xContentType The content type of the source
+     *
+     * @deprecated use {@link #mapping(String source, MediaType mediaType)} instead
      */
+    @Deprecated
     public CreateIndexRequest mapping(String source, XContentType xContentType) {
         return mapping(new BytesArray(source), xContentType);
+    }
+
+    /**
+     * Adds mapping that will be added when the index gets created.
+     * <p>
+     * Note that the definition should *not* be nested under a type name.
+     *
+     * @param source The mapping source
+     * @param mediaType The media type of the source
+     */
+    public CreateIndexRequest mapping(String source, MediaType mediaType) {
+        return mapping(new BytesArray(source), mediaType);
     }
 
     /**
@@ -258,10 +293,27 @@ public class CreateIndexRequest extends AcknowledgedRequest<CreateIndexRequest> 
      *
      * @param source The mapping source
      * @param xContentType the content type of the mapping source
+     *
+     * @deprecated use {@link #mapping(BytesReference source, MediaType mediaType)} instead
      */
+    @Deprecated
     private CreateIndexRequest mapping(BytesReference source, XContentType xContentType) {
         Objects.requireNonNull(xContentType);
         Map<String, Object> mappingAsMap = XContentHelper.convertToMap(source, false, xContentType).v2();
+        return mapping(MapperService.SINGLE_MAPPING_NAME, mappingAsMap);
+    }
+
+    /**
+     * Adds mapping that will be added when the index gets created.
+     * <p>
+     * Note that the definition should *not* be nested under a type name.
+     *
+     * @param source The mapping source
+     * @param mediaType The media type of the source
+     */
+    public CreateIndexRequest mapping(BytesReference source, MediaType mediaType) {
+        Objects.requireNonNull(mediaType);
+        Map<String, Object> mappingAsMap = XContentHelper.convertToMap(source, false, mediaType).v2();
         return mapping(MapperService.SINGLE_MAPPING_NAME, mappingAsMap);
     }
 
@@ -302,7 +354,7 @@ public class CreateIndexRequest extends AcknowledgedRequest<CreateIndexRequest> 
         try {
             XContentBuilder builder = XContentFactory.jsonBuilder();
             builder.map(source);
-            return mapping(Strings.toString(builder));
+            return mapping(builder.toString());
         } catch (IOException e) {
             throw new OpenSearchGenerationException("Failed to generate [" + source + "]", e);
         }
@@ -379,9 +431,21 @@ public class CreateIndexRequest extends AcknowledgedRequest<CreateIndexRequest> 
 
     /**
      * Sets the settings and mappings as a single source.
+     *
+     * @deprecated use {@link #source(String, MediaType)} instead
      */
+    @Deprecated
     public CreateIndexRequest source(String source, XContentType xContentType) {
         return source(new BytesArray(source), xContentType);
+    }
+
+    /**
+     * Sets the settings and mappings as a single source.
+     * <p>
+     * Note that the mapping definition should *not* be nested under a type name.
+     */
+    public CreateIndexRequest source(String source, MediaType mediaType) {
+        return source(new BytesArray(source), mediaType);
     }
 
     /**
@@ -393,14 +457,29 @@ public class CreateIndexRequest extends AcknowledgedRequest<CreateIndexRequest> 
 
     /**
      * Sets the settings and mappings as a single source.
+     *
+     * @deprecated use {@link #source(byte[], MediaType mediaType)} instead
      */
+    @Deprecated
     public CreateIndexRequest source(byte[] source, XContentType xContentType) {
         return source(source, 0, source.length, xContentType);
     }
 
     /**
      * Sets the settings and mappings as a single source.
+     * <p>
+     * Note that the mapping definition should *not* be nested under a type name.
      */
+    public CreateIndexRequest source(byte[] source, MediaType mediaType) {
+        return source(source, 0, source.length, mediaType);
+    }
+
+    /**
+     * Sets the settings and mappings as a single source.
+     *
+     * @deprecated use {@link #source(byte[], int, int, MediaType)} instead
+     */
+    @Deprecated
     public CreateIndexRequest source(byte[] source, int offset, int length, XContentType xContentType) {
         return source(new BytesArray(source, offset, length), xContentType);
     }
@@ -408,9 +487,28 @@ public class CreateIndexRequest extends AcknowledgedRequest<CreateIndexRequest> 
     /**
      * Sets the settings and mappings as a single source.
      */
+    public CreateIndexRequest source(byte[] source, int offset, int length, MediaType mediaType) {
+        return source(new BytesArray(source, offset, length), mediaType);
+    }
+
+    /**
+     * Sets the settings and mappings as a single source.
+     *
+     * @deprecated use {@link #source(BytesReference, MediaType)} instead
+     */
+    @Deprecated
     public CreateIndexRequest source(BytesReference source, XContentType xContentType) {
         Objects.requireNonNull(xContentType);
         source(XContentHelper.convertToMap(source, false, xContentType).v2(), LoggingDeprecationHandler.INSTANCE);
+        return this;
+    }
+
+    /**
+     * Sets the settings and mappings as a single source.
+     */
+    public CreateIndexRequest source(BytesReference source, MediaType mediaType) {
+        Objects.requireNonNull(mediaType);
+        source(XContentHelper.convertToMap(source, false, mediaType).v2(), LoggingDeprecationHandler.INSTANCE);
         return this;
     }
 
@@ -433,6 +531,8 @@ public class CreateIndexRequest extends AcknowledgedRequest<CreateIndexRequest> 
                 }
             } else if (ALIASES.match(name, deprecationHandler)) {
                 aliases((Map<String, Object>) entry.getValue());
+            } else if (CONTEXT.match(name, deprecationHandler)) {
+                context((Map<String, Object>) entry.getValue());
             } else {
                 throw new OpenSearchParseException("unknown key [{}] for create index", name);
             }
@@ -480,6 +580,36 @@ public class CreateIndexRequest extends AcknowledgedRequest<CreateIndexRequest> 
         return waitForActiveShards(ActiveShardCount.from(waitForActiveShards));
     }
 
+    public CreateIndexRequest context(Map<String, ?> source) {
+        try {
+            XContentBuilder builder = XContentFactory.jsonBuilder();
+            builder.map(source);
+            return context(BytesReference.bytes(builder));
+        } catch (IOException e) {
+            throw new OpenSearchGenerationException("Failed to generate [" + source + "]", e);
+        }
+    }
+
+    public CreateIndexRequest context(BytesReference source) {
+        // EMPTY is safe here because we never call namedObject
+        try (XContentParser parser = XContentHelper.createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE, source)) {
+            // move to the first alias
+            context(Context.fromXContent(parser));
+            return this;
+        } catch (IOException e) {
+            throw new OpenSearchParseException("Failed to parse context", e);
+        }
+    }
+
+    public CreateIndexRequest context(Context context) {
+        this.context = context;
+        return this;
+    }
+
+    public Context context() {
+        return context;
+    }
+
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         super.writeTo(out);
@@ -502,5 +632,32 @@ public class CreateIndexRequest extends AcknowledgedRequest<CreateIndexRequest> 
             alias.writeTo(out);
         }
         waitForActiveShards.writeTo(out);
+        if (out.getVersion().onOrAfter(Version.V_2_17_0)) {
+            out.writeOptionalWriteable(context);
+        }
+    }
+
+    @Override
+    public String toString() {
+        return "CreateIndexRequest{"
+            + "cause='"
+            + cause
+            + '\''
+            + ", index='"
+            + index
+            + '\''
+            + ", settings="
+            + settings
+            + ", mappings='"
+            + mappings
+            + '\''
+            + ", aliases="
+            + aliases
+            + '\''
+            + ", context="
+            + context
+            + ", waitForActiveShards="
+            + waitForActiveShards
+            + '}';
     }
 }

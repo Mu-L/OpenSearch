@@ -34,15 +34,16 @@ package org.opensearch.repositories.blobstore;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.message.ParameterizedMessage;
-import org.opensearch.action.ActionListener;
 import org.opensearch.common.lucene.Lucene;
 import org.opensearch.common.util.iterable.Iterables;
-import org.opensearch.index.shard.ShardId;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.index.snapshots.IndexShardRestoreFailedException;
 import org.opensearch.index.snapshots.blobstore.BlobStoreIndexShardSnapshot;
 import org.opensearch.index.snapshots.blobstore.SnapshotFiles;
 import org.opensearch.index.store.Store;
 import org.opensearch.index.store.StoreFileMetadata;
+import org.opensearch.index.store.remote.directory.RemoteSnapshotDirectory;
 import org.opensearch.indices.recovery.RecoveryState;
 import org.opensearch.snapshots.SnapshotId;
 
@@ -198,6 +199,10 @@ public abstract class FileRestoreContext {
     }
 
     private void afterRestore(SnapshotFiles snapshotFiles, Store store, StoreFileMetadata restoredSegmentsFile) {
+        // no cleanup needed for searchable snapshots
+        if (store.directory() instanceof RemoteSnapshotDirectory) {
+            return;
+        }
         // read the snapshot data persisted
         try {
             Lucene.pruneUnreferencedFiles(restoredSegmentsFile.name(), store.directory());

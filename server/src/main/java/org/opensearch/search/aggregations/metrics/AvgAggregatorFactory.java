@@ -32,18 +32,19 @@
 
 package org.opensearch.search.aggregations.metrics;
 
+import org.opensearch.index.compositeindex.datacube.MetricStat;
 import org.opensearch.index.query.QueryShardContext;
 import org.opensearch.search.aggregations.Aggregator;
 import org.opensearch.search.aggregations.AggregatorFactories;
 import org.opensearch.search.aggregations.AggregatorFactory;
 import org.opensearch.search.aggregations.CardinalityUpperBound;
 import org.opensearch.search.aggregations.support.CoreValuesSourceType;
-import org.opensearch.search.aggregations.support.ValuesSourceAggregatorFactory;
 import org.opensearch.search.aggregations.support.ValuesSourceConfig;
 import org.opensearch.search.aggregations.support.ValuesSourceRegistry;
 import org.opensearch.search.internal.SearchContext;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -51,7 +52,7 @@ import java.util.Map;
  *
  * @opensearch.internal
  */
-class AvgAggregatorFactory extends ValuesSourceAggregatorFactory {
+class AvgAggregatorFactory extends MetricAggregatorFactory {
 
     AvgAggregatorFactory(
         String name,
@@ -64,10 +65,15 @@ class AvgAggregatorFactory extends ValuesSourceAggregatorFactory {
         super(name, config, queryShardContext, parent, subFactoriesBuilder, metadata);
     }
 
+    @Override
+    public MetricStat getMetricStat() {
+        return MetricStat.AVG;
+    }
+
     static void registerAggregators(ValuesSourceRegistry.Builder builder) {
         builder.register(
             AvgAggregationBuilder.REGISTRY_KEY,
-            org.opensearch.common.collect.List.of(CoreValuesSourceType.NUMERIC, CoreValuesSourceType.DATE, CoreValuesSourceType.BOOLEAN),
+            List.of(CoreValuesSourceType.NUMERIC, CoreValuesSourceType.DATE, CoreValuesSourceType.BOOLEAN),
             AvgAggregator::new,
             true
         );
@@ -88,5 +94,10 @@ class AvgAggregatorFactory extends ValuesSourceAggregatorFactory {
         return queryShardContext.getValuesSourceRegistry()
             .getAggregator(AvgAggregationBuilder.REGISTRY_KEY, config)
             .build(name, config, searchContext, parent, metadata);
+    }
+
+    @Override
+    protected boolean supportsConcurrentSegmentSearch() {
+        return true;
     }
 }

@@ -32,8 +32,8 @@
 
 package org.opensearch.action.support.clustermanager;
 
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
 
 import java.io.IOException;
 
@@ -46,6 +46,8 @@ public abstract class ClusterManagerNodeReadRequest<Request extends ClusterManag
     ClusterManagerNodeRequest<Request> {
 
     protected boolean local = false;
+
+    protected boolean shouldCancelOnTimeout = false;
 
     protected ClusterManagerNodeReadRequest() {}
 
@@ -73,5 +75,13 @@ public abstract class ClusterManagerNodeReadRequest<Request extends ClusterManag
      */
     public final boolean local() {
         return local;
+    }
+
+    public void setShouldCancelOnTimeout(boolean shouldCancelOnTimeout) {
+        this.shouldCancelOnTimeout = shouldCancelOnTimeout;
+    }
+
+    public boolean getShouldCancelOnTimeout() {
+        return this.shouldCancelOnTimeout;
     }
 }

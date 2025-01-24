@@ -32,7 +32,6 @@
 
 package org.opensearch.cluster.routing.allocation.decider;
 
-import com.carrotsearch.hppc.cursors.ObjectCursor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.Version;
@@ -48,42 +47,49 @@ import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.cluster.routing.ShardRoutingState;
 import org.opensearch.cluster.routing.allocation.DiskThresholdSettings;
 import org.opensearch.cluster.routing.allocation.RoutingAllocation;
-import org.opensearch.common.Strings;
-import org.opensearch.common.collect.ImmutableOpenMap;
 import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.unit.ByteSizeValue;
-import org.opensearch.index.Index;
-import org.opensearch.index.shard.ShardId;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.unit.ByteSizeValue;
+import org.opensearch.core.index.Index;
+import org.opensearch.core.index.shard.ShardId;
+import org.opensearch.index.store.remote.filecache.FileCacheSettings;
+import org.opensearch.index.store.remote.filecache.FileCacheStats;
 import org.opensearch.snapshots.SnapshotShardSizeInfo;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
+import static org.opensearch.cluster.routing.RoutingPool.REMOTE_CAPABLE;
+import static org.opensearch.cluster.routing.RoutingPool.getNodePool;
+import static org.opensearch.cluster.routing.RoutingPool.getShardPool;
 import static org.opensearch.cluster.routing.allocation.DiskThresholdSettings.CLUSTER_ROUTING_ALLOCATION_HIGH_DISK_WATERMARK_SETTING;
 import static org.opensearch.cluster.routing.allocation.DiskThresholdSettings.CLUSTER_ROUTING_ALLOCATION_LOW_DISK_WATERMARK_SETTING;
 
 /**
  * The {@link DiskThresholdDecider} checks that the node a shard is potentially
  * being allocated to has enough disk space.
- *
+ * <p>
  * It has three configurable settings, all of which can be changed dynamically:
- *
+ * <p>
  * <code>cluster.routing.allocation.disk.watermark.low</code> is the low disk
  * watermark. New shards will not allocated to a node with usage higher than this,
  * although this watermark may be passed by allocating a shard. It defaults to
  * 0.85 (85.0%).
- *
+ * <p>
  * <code>cluster.routing.allocation.disk.watermark.high</code> is the high disk
  * watermark. If a node has usage higher than this, shards are not allowed to
  * remain on the node. In addition, if allocating a shard to a node causes the
  * node to pass this watermark, it will not be allowed. It defaults to
  * 0.90 (90.0%).
- *
+ * <p>
  * Both watermark settings are expressed in terms of used disk percentage, or
  * exact byte values for free space (like "500mb")
- *
+ * <p>
  * <code>cluster.routing.allocation.disk.threshold_enabled</code> is used to
  * enable or disable this decider. It defaults to true (enabled).
  *
@@ -103,17 +109,19 @@ public class DiskThresholdDecider extends AllocationDecider {
 
     private final DiskThresholdSettings diskThresholdSettings;
     private final boolean enableForSingleDataNode;
+    private final FileCacheSettings fileCacheSettings;
 
     public DiskThresholdDecider(Settings settings, ClusterSettings clusterSettings) {
         this.diskThresholdSettings = new DiskThresholdSettings(settings, clusterSettings);
         assert Version.CURRENT.major < 9 : "remove enable_for_single_data_node in 9";
         this.enableForSingleDataNode = ENABLE_FOR_SINGLE_DATA_NODE.get(settings);
+        this.fileCacheSettings = new FileCacheSettings(settings, clusterSettings);
     }
 
     /**
      * Returns the size of all shards that are currently being relocated to
      * the node, but may not be finished transferring yet.
-     *
+     * <p>
      * If subtractShardsMovingAway is true then the size of shards moving away is subtracted from the total size of all shards
      */
     public static long sizeOfRelocatingShards(
@@ -132,9 +140,8 @@ public class DiskThresholdDecider extends AllocationDecider {
 
         // Where reserved space is unavailable (e.g. stats are out-of-sync) compute a conservative estimate for initialising shards
         final List<ShardRouting> initializingShards = node.shardsWithState(ShardRoutingState.INITIALIZING);
-        initializingShards.removeIf(shardRouting -> reservedSpace.containsShardId(shardRouting.shardId()));
         for (ShardRouting routing : initializingShards) {
-            if (routing.relocatingNodeId() == null) {
+            if (routing.relocatingNodeId() == null || reservedSpace.containsShardId(routing.shardId())) {
                 // in practice the only initializing-but-not-relocating shards with a nonzero expected shard size will be ones created
                 // by a resize (shrink/split/clone) operation which we expect to happen using hard links, so they shouldn't be taking
                 // any additional space and can be ignored here
@@ -168,7 +175,50 @@ public class DiskThresholdDecider extends AllocationDecider {
     @Override
     public Decision canAllocate(ShardRouting shardRouting, RoutingNode node, RoutingAllocation allocation) {
         ClusterInfo clusterInfo = allocation.clusterInfo();
-        ImmutableOpenMap<String, DiskUsage> usages = clusterInfo.getNodeMostAvailableDiskUsages();
+
+        /*
+         The following block enables allocation for remote shards within safeguard limits of the filecache.
+         */
+        if (REMOTE_CAPABLE.equals(getNodePool(node)) && REMOTE_CAPABLE.equals(getShardPool(shardRouting, allocation))) {
+            final double dataToFileCacheSizeRatio = fileCacheSettings.getRemoteDataRatio();
+            // we don't need to check the ratio
+            if (dataToFileCacheSizeRatio <= 0.1f) {
+                return Decision.YES;
+            }
+
+            final List<ShardRouting> remoteShardsOnNode = StreamSupport.stream(node.spliterator(), false)
+                .filter(shard -> shard.primary() && REMOTE_CAPABLE.equals(getShardPool(shard, allocation)))
+                .collect(Collectors.toList());
+            final long currentNodeRemoteShardSize = remoteShardsOnNode.stream()
+                .map(ShardRouting::getExpectedShardSize)
+                .mapToLong(Long::longValue)
+                .sum();
+
+            final long shardSize = getExpectedShardSize(
+                shardRouting,
+                0L,
+                allocation.clusterInfo(),
+                allocation.snapshotShardSizeInfo(),
+                allocation.metadata(),
+                allocation.routingTable()
+            );
+
+            final FileCacheStats fileCacheStats = clusterInfo.getNodeFileCacheStats().getOrDefault(node.nodeId(), null);
+            final long nodeCacheSize = fileCacheStats != null ? fileCacheStats.getTotal().getBytes() : 0;
+            final long totalNodeRemoteShardSize = currentNodeRemoteShardSize + shardSize;
+            if (dataToFileCacheSizeRatio > 0.0f && totalNodeRemoteShardSize > dataToFileCacheSizeRatio * nodeCacheSize) {
+                return allocation.decision(
+                    Decision.NO,
+                    NAME,
+                    "file cache limit reached - remote shard size will exceed configured safeguard ratio"
+                );
+            }
+            return Decision.YES;
+        } else if (REMOTE_CAPABLE.equals(getShardPool(shardRouting, allocation))) {
+            return Decision.NO;
+        }
+
+        Map<String, DiskUsage> usages = clusterInfo.getNodeMostAvailableDiskUsages();
         final Decision decision = earlyTerminate(allocation, usages);
         if (decision != null) {
             return decision;
@@ -179,7 +229,14 @@ public class DiskThresholdDecider extends AllocationDecider {
 
         // subtractLeavingShards is passed as false here, because they still use disk space, and therefore we should be extra careful
         // and take the size into account
-        final DiskUsageWithRelocations usage = getDiskUsage(node, allocation, usages, false);
+        final DiskUsageWithRelocations usage = getDiskUsage(
+            node,
+            allocation,
+            usages,
+            clusterInfo.getAvgFreeByte(),
+            clusterInfo.getAvgTotalBytes(),
+            false
+        );
         // First, check that the node currently over the low watermark
         double freeDiskPercentage = usage.getFreeDiskAsPercentage();
         // Cache the used disk percentage for displaying disk percentages consistent with documentation
@@ -423,8 +480,17 @@ public class DiskThresholdDecider extends AllocationDecider {
         if (shardRouting.currentNodeId().equals(node.nodeId()) == false) {
             throw new IllegalArgumentException("Shard [" + shardRouting + "] is not allocated on node: [" + node.nodeId() + "]");
         }
+
+        /*
+         The following block prevents movement for remote shards since they do not use the local storage as
+         the primary source of data storage.
+         */
+        if (REMOTE_CAPABLE.equals(getNodePool(node)) && REMOTE_CAPABLE.equals(getShardPool(shardRouting, allocation))) {
+            return Decision.ALWAYS;
+        }
+
         final ClusterInfo clusterInfo = allocation.clusterInfo();
-        final ImmutableOpenMap<String, DiskUsage> usages = clusterInfo.getNodeLeastAvailableDiskUsages();
+        final Map<String, DiskUsage> usages = clusterInfo.getNodeLeastAvailableDiskUsages();
         final Decision decision = earlyTerminate(allocation, usages);
         if (decision != null) {
             return decision;
@@ -432,7 +498,14 @@ public class DiskThresholdDecider extends AllocationDecider {
 
         // subtractLeavingShards is passed as true here, since this is only for shards remaining, we will *eventually* have enough disk
         // since shards are moving away. No new shards will be incoming since in canAllocate we pass false for this check.
-        final DiskUsageWithRelocations usage = getDiskUsage(node, allocation, usages, true);
+        final DiskUsageWithRelocations usage = getDiskUsage(
+            node,
+            allocation,
+            usages,
+            clusterInfo.getAvgFreeByte(),
+            clusterInfo.getAvgTotalBytes(),
+            true
+        );
         final String dataPath = clusterInfo.getDataPath(shardRouting);
         // If this node is already above the high threshold, the shard cannot remain (get it off!)
         final double freeDiskPercentage = usage.getFreeDiskAsPercentage();
@@ -520,14 +593,16 @@ public class DiskThresholdDecider extends AllocationDecider {
     private DiskUsageWithRelocations getDiskUsage(
         RoutingNode node,
         RoutingAllocation allocation,
-        ImmutableOpenMap<String, DiskUsage> usages,
+        final Map<String, DiskUsage> usages,
+        final long avgFreeBytes,
+        final long avgTotalBytes,
         boolean subtractLeavingShards
     ) {
         DiskUsage usage = usages.get(node.nodeId());
         if (usage == null) {
             // If there is no usage, and we have other nodes in the cluster,
             // use the average usage for all nodes as the usage for this node
-            usage = averageUsage(node, usages);
+            usage = new DiskUsage(node.nodeId(), node.node().getName(), "_na_", avgTotalBytes, avgFreeBytes);
             if (logger.isDebugEnabled()) {
                 logger.debug(
                     "unable to determine disk usage for {}, defaulting to average across nodes [{} total] [{} free] [{}% free]",
@@ -560,26 +635,6 @@ public class DiskThresholdDecider extends AllocationDecider {
     }
 
     /**
-     * Returns a {@link DiskUsage} for the {@link RoutingNode} using the
-     * average usage of other nodes in the disk usage map.
-     * @param node Node to return an averaged DiskUsage object for
-     * @param usages Map of nodeId to DiskUsage for all known nodes
-     * @return DiskUsage representing given node using the average disk usage
-     */
-    DiskUsage averageUsage(RoutingNode node, ImmutableOpenMap<String, DiskUsage> usages) {
-        if (usages.size() == 0) {
-            return new DiskUsage(node.nodeId(), node.node().getName(), "_na_", 0, 0);
-        }
-        long totalBytes = 0;
-        long freeBytes = 0;
-        for (ObjectCursor<DiskUsage> du : usages.values()) {
-            totalBytes += du.value.getTotalBytes();
-            freeBytes += du.value.getFreeBytes();
-        }
-        return new DiskUsage(node.nodeId(), node.node().getName(), "_na_", totalBytes / usages.size(), freeBytes / usages.size());
-    }
-
-    /**
      * Given the DiskUsage for a node and the size of the shard, return the
      * percentage of free disk if the shard were to be allocated to the node.
      * @param usage A DiskUsage for the node to have space computed for
@@ -598,7 +653,7 @@ public class DiskThresholdDecider extends AllocationDecider {
         return newUsage.getFreeDiskAsPercentage();
     }
 
-    private Decision earlyTerminate(RoutingAllocation allocation, ImmutableOpenMap<String, DiskUsage> usages) {
+    private Decision earlyTerminate(RoutingAllocation allocation, final Map<String, DiskUsage> usages) {
         // Always allow allocation if the decider is disabled
         if (diskThresholdSettings.isEnabled() == false) {
             return allocation.decision(Decision.YES, NAME, "the disk threshold decider is disabled");

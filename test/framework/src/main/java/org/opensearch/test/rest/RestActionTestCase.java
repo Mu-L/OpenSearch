@@ -32,14 +32,14 @@
 
 package org.opensearch.test.rest;
 
-import org.opensearch.action.ActionListener;
 import org.opensearch.action.ActionRequest;
-import org.opensearch.action.ActionResponse;
 import org.opensearch.action.ActionType;
+import org.opensearch.client.node.NodeClient;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.util.concurrent.ThreadContext;
-import org.opensearch.indices.breaker.NoneCircuitBreakerService;
-import org.opensearch.client.node.NodeClient;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.action.ActionResponse;
+import org.opensearch.core.indices.breaker.NoneCircuitBreakerService;
 import org.opensearch.rest.RestController;
 import org.opensearch.rest.RestRequest;
 import org.opensearch.tasks.Task;
@@ -93,7 +93,7 @@ public abstract class RestActionTestCase extends OpenSearchTestCase {
     /**
      * A mocked {@link NodeClient} which can be easily reconfigured to verify arbitrary verification
      * functions, and can be reset to allow reconfiguration partway through a test without having to construct a new object.
-     *
+     * <p>
      * By default, will throw {@link AssertionError} when any execution method is called, unless configured otherwise using
      * {@link #setExecuteVerifier(BiFunction)} or {@link #setExecuteLocallyVerifier(BiFunction)}.
      */
@@ -122,7 +122,7 @@ public abstract class RestActionTestCase extends OpenSearchTestCase {
          * @param verifier A function which is called in place of {@link #doExecute(ActionType, ActionRequest, ActionListener)}
          */
         public <Request extends ActionRequest, Response extends ActionResponse> void setExecuteVerifier(
-            BiFunction<ActionType<Response>, Request, Void> verifier
+            BiFunction<ActionType<Response>, Request, Response> verifier
         ) {
             executeVerifier.set(verifier);
         }
@@ -142,7 +142,7 @@ public abstract class RestActionTestCase extends OpenSearchTestCase {
          * @param verifier A function which is called in place of {@link #executeLocally(ActionType, ActionRequest, TaskListener)}
          */
         public <Request extends ActionRequest, Response extends ActionResponse> void setExecuteLocallyVerifier(
-            BiFunction<ActionType<Response>, Request, Void> verifier
+            BiFunction<ActionType<Response>, Request, Response> verifier
         ) {
             executeLocallyVerifier.set(verifier);
         }

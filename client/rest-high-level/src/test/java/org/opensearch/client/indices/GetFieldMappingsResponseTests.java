@@ -33,8 +33,8 @@
 package org.opensearch.client.indices;
 
 import org.opensearch.client.indices.GetFieldMappingsResponse.FieldMappingMetadata;
-import org.opensearch.common.bytes.BytesArray;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.core.common.bytes.BytesArray;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.test.OpenSearchTestCase;
 
 import java.io.IOException;

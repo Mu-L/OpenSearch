@@ -47,8 +47,8 @@ import org.apache.lucene.search.vectorhighlight.SimpleFragListBuilder;
 import org.apache.lucene.search.vectorhighlight.SingleFragListBuilder;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.text.Text;
-import org.opensearch.common.util.CollectionUtils;
+import org.opensearch.core.common.text.Text;
+import org.opensearch.core.common.util.CollectionUtils;
 import org.opensearch.index.mapper.MappedFieldType;
 import org.opensearch.index.mapper.TextSearchInfo;
 import org.opensearch.search.fetch.FetchSubPhase;
@@ -304,7 +304,7 @@ public class FastVectorHighlighter implements Highlighter {
                 return DEFAULT_WORD_BOUNDARY_SCANNER;
             case CHARS:
                 if (fieldOptions.boundaryMaxScan() != SimpleBoundaryScanner.DEFAULT_MAX_SCAN
-                    || fieldOptions.boundaryChars() != SimpleBoundaryScanner.DEFAULT_BOUNDARY_CHARS) {
+                    || fieldOptions.boundaryChars() != HighlightBuilder.DEFAULT_BOUNDARY_CHARS) {
                     return new SimpleBoundaryScanner(fieldOptions.boundaryMaxScan(), fieldOptions.boundaryChars());
                 }
                 return DEFAULT_SIMPLE_BOUNDARY_SCANNER;

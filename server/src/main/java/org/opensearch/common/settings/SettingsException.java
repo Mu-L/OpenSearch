@@ -33,15 +33,18 @@
 package org.opensearch.common.settings;
 
 import org.opensearch.OpenSearchException;
-import org.opensearch.common.io.stream.StreamInput;
+import org.opensearch.common.annotation.PublicApi;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.rest.RestStatus;
 
 import java.io.IOException;
 
 /**
  * A generic failure to handle settings.
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class SettingsException extends OpenSearchException {
 
     public SettingsException(String message) {
@@ -58,5 +61,10 @@ public class SettingsException extends OpenSearchException {
 
     public SettingsException(String msg, Object... args) {
         super(msg, args);
+    }
+
+    @Override
+    public RestStatus status() {
+        return RestStatus.BAD_REQUEST;
     }
 }

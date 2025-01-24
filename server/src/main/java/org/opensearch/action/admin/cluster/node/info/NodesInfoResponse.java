@@ -36,19 +36,20 @@ import org.opensearch.action.FailedNodeException;
 import org.opensearch.action.support.nodes.BaseNodesResponse;
 import org.opensearch.cluster.ClusterName;
 import org.opensearch.cluster.node.DiscoveryNodeRole;
-import org.opensearch.common.Strings;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.xcontent.ToXContentFragment;
-import org.opensearch.common.xcontent.XContentBuilder;
 import org.opensearch.common.xcontent.XContentFactory;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.xcontent.ToXContentFragment;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.http.HttpInfo;
 import org.opensearch.ingest.IngestInfo;
 import org.opensearch.monitor.jvm.JvmInfo;
 import org.opensearch.monitor.os.OsInfo;
 import org.opensearch.monitor.process.ProcessInfo;
 import org.opensearch.search.aggregations.support.AggregationInfo;
+import org.opensearch.search.pipeline.SearchPipelineInfo;
 import org.opensearch.threadpool.ThreadPoolInfo;
 import org.opensearch.transport.TransportInfo;
 
@@ -59,8 +60,9 @@ import java.util.Map;
 /**
  * Transport response for OpenSearch Node Information
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class NodesInfoResponse extends BaseNodesResponse<NodeInfo> implements ToXContentFragment {
 
     public NodesInfoResponse(StreamInput in) throws IOException {
@@ -96,7 +98,7 @@ public class NodesInfoResponse extends BaseNodesResponse<NodeInfo> implements To
             builder.field("build_type", nodeInfo.getBuild().type().displayName());
             builder.field("build_hash", nodeInfo.getBuild().hash());
             if (nodeInfo.getTotalIndexingBuffer() != null) {
-                builder.humanReadableField("total_indexing_buffer", "total_indexing_buffer_in_bytes", nodeInfo.getTotalIndexingBuffer());
+                builder.humanReadableField("total_indexing_buffer_in_bytes", "total_indexing_buffer", nodeInfo.getTotalIndexingBuffer());
             }
 
             builder.startArray("roles");
@@ -147,6 +149,9 @@ public class NodesInfoResponse extends BaseNodesResponse<NodeInfo> implements To
             if (nodeInfo.getInfo(AggregationInfo.class) != null) {
                 nodeInfo.getInfo(AggregationInfo.class).toXContent(builder, params);
             }
+            if (nodeInfo.getInfo(SearchPipelineInfo.class) != null) {
+                nodeInfo.getInfo(SearchPipelineInfo.class).toXContent(builder, params);
+            }
 
             builder.endObject();
         }
@@ -161,7 +166,7 @@ public class NodesInfoResponse extends BaseNodesResponse<NodeInfo> implements To
             builder.startObject();
             toXContent(builder, EMPTY_PARAMS);
             builder.endObject();
-            return Strings.toString(builder);
+            return builder.toString();
         } catch (IOException e) {
             return "{ \"error\" : \"" + e.getMessage() + "\"}";
         }

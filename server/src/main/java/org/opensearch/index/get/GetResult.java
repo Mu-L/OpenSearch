@@ -34,17 +34,20 @@ package org.opensearch.index.get;
 
 import org.opensearch.OpenSearchParseException;
 import org.opensearch.Version;
-import org.opensearch.common.Strings;
-import org.opensearch.common.bytes.BytesReference;
-import org.opensearch.common.compress.CompressorFactory;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.document.DocumentField;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.io.stream.Writeable;
-import org.opensearch.common.xcontent.ToXContentObject;
-import org.opensearch.common.xcontent.XContentBuilder;
 import org.opensearch.common.xcontent.XContentHelper;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.common.ParsingException;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.compress.CompressorRegistry;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.ToXContentObject;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.mapper.IgnoredFieldMapper;
 import org.opensearch.index.mapper.MapperService;
 import org.opensearch.index.mapper.SourceFieldMapper;
@@ -54,11 +57,12 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
 import static java.util.Collections.emptyMap;
-import static org.opensearch.common.xcontent.XContentParserUtils.ensureExpectedToken;
+import static org.opensearch.core.xcontent.XContentParserUtils.ensureExpectedToken;
 import static org.opensearch.index.seqno.SequenceNumbers.UNASSIGNED_PRIMARY_TERM;
 import static org.opensearch.index.seqno.SequenceNumbers.UNASSIGNED_SEQ_NO;
 
@@ -67,6 +71,7 @@ import static org.opensearch.index.seqno.SequenceNumbers.UNASSIGNED_SEQ_NO;
  *
  * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class GetResult implements Writeable, Iterable<DocumentField>, ToXContentObject {
 
     public static final String _INDEX = "_index";
@@ -205,7 +210,7 @@ public class GetResult implements Writeable, Iterable<DocumentField>, ToXContent
         }
 
         try {
-            this.source = CompressorFactory.uncompressIfNeeded(this.source);
+            this.source = CompressorRegistry.uncompressIfNeeded(this.source);
             return this.source;
         } catch (IOException e) {
             throw new OpenSearchParseException("failed to decompress source", e);
@@ -395,6 +400,14 @@ public class GetResult implements Writeable, Iterable<DocumentField>, ToXContent
                 }
             }
         }
+
+        if (found == null) {
+            throw new ParsingException(
+                parser.getTokenLocation(),
+                String.format(Locale.ROOT, "Missing required field [%s]", GetResult.FOUND)
+            );
+        }
+
         return new GetResult(index, id, seqNo, primaryTerm, version, found, source, documentFields, metaFields);
     }
 
@@ -476,6 +489,6 @@ public class GetResult implements Writeable, Iterable<DocumentField>, ToXContent
 
     @Override
     public String toString() {
-        return Strings.toString(this, true, true);
+        return Strings.toString(MediaTypeRegistry.JSON, this, true, true);
     }
 }

@@ -32,19 +32,23 @@
 
 package org.opensearch.ingest;
 
+import org.opensearch.Version;
 import org.opensearch.cluster.AbstractDiffable;
 import org.opensearch.cluster.Diff;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.Strings;
-import org.opensearch.common.bytes.BytesReference;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.xcontent.ContextParser;
-import org.opensearch.common.xcontent.ObjectParser;
-import org.opensearch.common.xcontent.ToXContentObject;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.xcontent.XContentHelper;
 import org.opensearch.common.xcontent.XContentType;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.xcontent.ContextParser;
+import org.opensearch.core.xcontent.MediaType;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.ObjectParser;
+import org.opensearch.core.xcontent.ToXContentObject;
+import org.opensearch.core.xcontent.XContentBuilder;
 
 import java.io.IOException;
 import java.util.Map;
@@ -53,8 +57,9 @@ import java.util.Objects;
 /**
  * Encapsulates a pipeline's id and configuration as a blob
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public final class PipelineConfiguration extends AbstractDiffable<PipelineConfiguration> implements ToXContentObject {
 
     private static final ObjectParser<Builder, Void> PARSER = new ObjectParser<>("pipeline_config", true, Builder::new);
@@ -76,19 +81,22 @@ public final class PipelineConfiguration extends AbstractDiffable<PipelineConfig
 
         private String id;
         private BytesReference config;
-        private XContentType xContentType;
+        private MediaType mediaType;
 
         void setId(String id) {
             this.id = id;
         }
 
-        void setConfig(BytesReference config, XContentType xContentType) {
+        void setConfig(BytesReference config, MediaType mediaType) {
+            if (mediaType instanceof XContentType == false) {
+                throw new IllegalArgumentException("PipelineConfiguration does not support media type [" + mediaType.getClass() + "]");
+            }
             this.config = config;
-            this.xContentType = xContentType;
+            this.mediaType = mediaType;
         }
 
         PipelineConfiguration build() {
-            return new PipelineConfiguration(id, config, xContentType);
+            return new PipelineConfiguration(id, config, mediaType);
         }
     }
 
@@ -97,12 +105,12 @@ public final class PipelineConfiguration extends AbstractDiffable<PipelineConfig
     // and the way the map of maps config is read requires a deep copy (it removes instead of gets entries to check for unused options)
     // also the get pipeline api just directly returns this to the caller
     private final BytesReference config;
-    private final XContentType xContentType;
+    private final MediaType mediaType;
 
-    public PipelineConfiguration(String id, BytesReference config, XContentType xContentType) {
+    public PipelineConfiguration(String id, BytesReference config, MediaType mediaType) {
         this.id = Objects.requireNonNull(id);
         this.config = Objects.requireNonNull(config);
-        this.xContentType = Objects.requireNonNull(xContentType);
+        this.mediaType = Objects.requireNonNull(mediaType);
     }
 
     public String getId() {
@@ -110,12 +118,12 @@ public final class PipelineConfiguration extends AbstractDiffable<PipelineConfig
     }
 
     public Map<String, Object> getConfigAsMap() {
-        return XContentHelper.convertToMap(config, true, xContentType).v2();
+        return XContentHelper.convertToMap(config, true, mediaType).v2();
     }
 
     // pkg-private for tests
-    XContentType getXContentType() {
-        return xContentType;
+    MediaType getMediaType() {
+        return mediaType;
     }
 
     // pkg-private for tests
@@ -133,7 +141,11 @@ public final class PipelineConfiguration extends AbstractDiffable<PipelineConfig
     }
 
     public static PipelineConfiguration readFrom(StreamInput in) throws IOException {
-        return new PipelineConfiguration(in.readString(), in.readBytesReference(), in.readEnum(XContentType.class));
+        return new PipelineConfiguration(
+            in.readString(),
+            in.readBytesReference(),
+            in.getVersion().onOrAfter(Version.V_2_10_0) ? in.readMediaType() : in.readEnum(XContentType.class)
+        );
     }
 
     public static Diff<PipelineConfiguration> readDiffFrom(StreamInput in) throws IOException {
@@ -142,14 +154,18 @@ public final class PipelineConfiguration extends AbstractDiffable<PipelineConfig
 
     @Override
     public String toString() {
-        return Strings.toString(this);
+        return Strings.toString(MediaTypeRegistry.JSON, this);
     }
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         out.writeString(id);
         out.writeBytesReference(config);
-        out.writeEnum(xContentType);
+        if (out.getVersion().onOrAfter(Version.V_2_10_0)) {
+            mediaType.writeTo(out);
+        } else {
+            out.writeEnum((XContentType) mediaType);
+        }
     }
 
     @Override

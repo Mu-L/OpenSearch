@@ -31,7 +31,6 @@
 
 package org.opensearch.lucene.queries;
 
-import org.apache.lucene.tests.analysis.MockAnalyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
@@ -47,7 +46,6 @@ import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.DisjunctionMaxQuery;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
-import org.apache.lucene.tests.search.QueryUtils;
 import org.apache.lucene.search.QueryVisitor;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.TermQuery;
@@ -56,10 +54,12 @@ import org.apache.lucene.search.similarities.BM25Similarity;
 import org.apache.lucene.search.similarities.ClassicSimilarity;
 import org.apache.lucene.search.similarities.Similarity;
 import org.apache.lucene.store.Directory;
-import org.opensearch.test.OpenSearchTestCase;
+import org.apache.lucene.tests.analysis.MockAnalyzer;
+import org.apache.lucene.tests.search.QueryUtils;
 import org.opensearch.test.EqualsHashCodeTestUtils;
 import org.opensearch.test.EqualsHashCodeTestUtils.CopyFunction;
 import org.opensearch.test.EqualsHashCodeTestUtils.MutateFunction;
+import org.opensearch.test.OpenSearchTestCase;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -112,7 +112,7 @@ public class BlendedTermQueryTests extends OpenSearchTestCase {
             query.add(BlendedTermQuery.dismaxBlendedQuery(toTerms(fields, "generator"), 0.1f), BooleanClause.Occur.SHOULD);
             TopDocs search = searcher.search(query.build(), 10);
             ScoreDoc[] scoreDocs = search.scoreDocs;
-            assertEquals(Integer.toString(0), reader.document(scoreDocs[0].doc).getField("id").stringValue());
+            assertEquals(Integer.toString(0), reader.storedFields().document(scoreDocs[0].doc).getField("id").stringValue());
         }
         {
             BooleanQuery.Builder query = new BooleanQuery.Builder();
@@ -134,7 +134,7 @@ public class BlendedTermQueryTests extends OpenSearchTestCase {
             query.add(gen, BooleanClause.Occur.SHOULD);
             TopDocs search = searcher.search(query.build(), 4);
             ScoreDoc[] scoreDocs = search.scoreDocs;
-            assertEquals(Integer.toString(1), reader.document(scoreDocs[0].doc).getField("id").stringValue());
+            assertEquals(Integer.toString(1), reader.storedFields().document(scoreDocs[0].doc).getField("id").stringValue());
 
         }
         {
@@ -144,8 +144,8 @@ public class BlendedTermQueryTests extends OpenSearchTestCase {
             Query rewrite = searcher.rewrite(query);
             assertThat(rewrite, instanceOf(BooleanQuery.class));
             for (BooleanClause clause : (BooleanQuery) rewrite) {
-                assertThat(clause.getQuery(), instanceOf(TermQuery.class));
-                TermQuery termQuery = (TermQuery) clause.getQuery();
+                assertThat(clause.query(), instanceOf(TermQuery.class));
+                TermQuery termQuery = (TermQuery) clause.query();
                 TermStates termStates = termQuery.getTermStates();
                 if (termQuery.getTerm().field().equals("unknown_field")) {
                     assertThat(termStates.docFreq(), equalTo(0));
@@ -155,7 +155,7 @@ public class BlendedTermQueryTests extends OpenSearchTestCase {
                     assertThat(termStates.totalTermFreq(), greaterThan(0L));
                 }
             }
-            assertThat(searcher.search(query, 10).totalHits.value, equalTo((long) iters + username.length));
+            assertThat(searcher.search(query, 10).totalHits.value(), equalTo((long) iters + username.length));
         }
         {
             // test with an unknown field and an unknown term
@@ -164,13 +164,13 @@ public class BlendedTermQueryTests extends OpenSearchTestCase {
             Query rewrite = searcher.rewrite(query);
             assertThat(rewrite, instanceOf(BooleanQuery.class));
             for (BooleanClause clause : (BooleanQuery) rewrite) {
-                assertThat(clause.getQuery(), instanceOf(TermQuery.class));
-                TermQuery termQuery = (TermQuery) clause.getQuery();
+                assertThat(clause.query(), instanceOf(TermQuery.class));
+                TermQuery termQuery = (TermQuery) clause.query();
                 TermStates termStates = termQuery.getTermStates();
                 assertThat(termStates.docFreq(), equalTo(0));
                 assertThat(termStates.totalTermFreq(), equalTo(0L));
             }
-            assertThat(searcher.search(query, 10).totalHits.value, equalTo(0L));
+            assertThat(searcher.search(query, 10).totalHits.value(), equalTo(0L));
         }
         {
             // test with an unknown field and a term that is present in only one field
@@ -179,8 +179,8 @@ public class BlendedTermQueryTests extends OpenSearchTestCase {
             Query rewrite = searcher.rewrite(query);
             assertThat(rewrite, instanceOf(BooleanQuery.class));
             for (BooleanClause clause : (BooleanQuery) rewrite) {
-                assertThat(clause.getQuery(), instanceOf(TermQuery.class));
-                TermQuery termQuery = (TermQuery) clause.getQuery();
+                assertThat(clause.query(), instanceOf(TermQuery.class));
+                TermQuery termQuery = (TermQuery) clause.query();
                 TermStates termStates = termQuery.getTermStates();
                 if (termQuery.getTerm().field().equals("username")) {
                     assertThat(termStates.docFreq(), equalTo(1));
@@ -190,7 +190,7 @@ public class BlendedTermQueryTests extends OpenSearchTestCase {
                     assertThat(termStates.totalTermFreq(), equalTo(0L));
                 }
             }
-            assertThat(searcher.search(query, 10).totalHits.value, equalTo(1L));
+            assertThat(searcher.search(query, 10).totalHits.value(), equalTo(1L));
         }
         reader.close();
         w.close();
@@ -269,7 +269,7 @@ public class BlendedTermQueryTests extends OpenSearchTestCase {
             Query query = BlendedTermQuery.dismaxBlendedQuery(toTerms(fields, "foo"), 0.1f);
             TopDocs search = searcher.search(query, 10);
             ScoreDoc[] scoreDocs = search.scoreDocs;
-            assertEquals(Integer.toString(0), reader.document(scoreDocs[0].doc).getField("id").stringValue());
+            assertEquals(Integer.toString(0), reader.storedFields().document(scoreDocs[0].doc).getField("id").stringValue());
         }
         reader.close();
         w.close();

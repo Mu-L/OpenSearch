@@ -33,7 +33,7 @@ package org.opensearch.indices.state;
 
 import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.opensearch.action.admin.cluster.reroute.ClusterRerouteRequest;
-import org.opensearch.action.support.master.AcknowledgedResponse;
+import org.opensearch.action.support.clustermanager.AcknowledgedResponse;
 import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.routing.IndexRoutingTable;
@@ -48,7 +48,7 @@ import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.common.util.concurrent.ConcurrentCollections;
-import org.opensearch.index.shard.ShardId;
+import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.indices.recovery.PeerRecoverySourceService;
 import org.opensearch.indices.recovery.StartRecoveryRequest;
 import org.opensearch.plugins.Plugin;
@@ -288,7 +288,7 @@ public class CloseWhileRelocatingShardsIT extends OpenSearchIntegTestCase {
             ensureGreen(indices);
 
             for (String index : acknowledgedCloses) {
-                long docsCount = client().prepareSearch(index).setSize(0).setTrackTotalHits(true).get().getHits().getTotalHits().value;
+                long docsCount = client().prepareSearch(index).setSize(0).setTrackTotalHits(true).get().getHits().getTotalHits().value();
                 assertEquals(
                     "Expected "
                         + docsPerIndex.get(index)

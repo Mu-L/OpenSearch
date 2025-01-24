@@ -34,21 +34,22 @@ package org.opensearch.repositories.url;
 
 import com.carrotsearch.randomizedtesting.annotations.Name;
 import com.carrotsearch.randomizedtesting.annotations.ParametersFactory;
-import org.opensearch.client.Request;
-import org.opensearch.client.Response;
-import org.opensearch.common.Strings;
-import org.opensearch.common.io.PathUtils;
-import org.opensearch.common.settings.Settings;
-import org.opensearch.common.xcontent.ToXContent;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.support.XContentMapValues;
-import org.opensearch.repositories.fs.FsRepository;
-import org.opensearch.rest.RestStatus;
-import org.opensearch.test.rest.yaml.ClientYamlTestCandidate;
-import org.opensearch.test.rest.yaml.OpenSearchClientYamlSuiteTestCase;
+
 import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.HttpEntity;
 import org.apache.hc.core5.http.io.entity.StringEntity;
+import org.opensearch.client.Request;
+import org.opensearch.client.Response;
+import org.opensearch.common.io.PathUtils;
+import org.opensearch.common.settings.Settings;
+import org.opensearch.common.xcontent.support.XContentMapValues;
+import org.opensearch.core.rest.RestStatus;
+import org.opensearch.core.xcontent.ToXContent;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.repositories.fs.FsRepository;
+import org.opensearch.test.junit.annotations.TestIssueLogging;
+import org.opensearch.test.rest.yaml.ClientYamlTestCandidate;
+import org.opensearch.test.rest.yaml.OpenSearchClientYamlSuiteTestCase;
 import org.junit.Before;
 
 import java.io.IOException;
@@ -63,6 +64,7 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.notNullValue;
 
+@TestIssueLogging(value = "_root:TRACE", issueUrl = "https://github.com/opensearch-project/OpenSearch/issues/9117")
 public class RepositoryURLClientYamlTestSuiteIT extends OpenSearchClientYamlSuiteTestCase {
 
     public RepositoryURLClientYamlTestSuiteIT(@Name("yaml") ClientYamlTestCandidate testCandidate) {
@@ -144,7 +146,7 @@ public class RepositoryURLClientYamlTestSuiteIT extends OpenSearchClientYamlSuit
                 builder.endObject();
             }
             builder.endObject();
-            return new StringEntity(Strings.toString(builder), ContentType.APPLICATION_JSON);
+            return new StringEntity(builder.toString(), ContentType.APPLICATION_JSON);
         }
     }
 }

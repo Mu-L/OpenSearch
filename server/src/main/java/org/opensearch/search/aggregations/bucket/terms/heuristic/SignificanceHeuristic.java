@@ -32,8 +32,8 @@
 
 package org.opensearch.search.aggregations.bucket.terms.heuristic;
 
-import org.opensearch.common.io.stream.NamedWriteable;
-import org.opensearch.common.xcontent.ToXContentFragment;
+import org.opensearch.core.common.io.stream.NamedWriteable;
+import org.opensearch.core.xcontent.ToXContentFragment;
 import org.opensearch.index.query.QueryShardContext;
 import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.bucket.terms.SignificantTerms;

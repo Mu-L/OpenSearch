@@ -43,7 +43,7 @@ import java.util.Set;
 /**
  * An implementation of {@link ValueFetcher} that knows how to extract values
  * from the document source.
- *
+ * <p>
  * This class differs from {@link SourceValueFetcher} in that it directly handles
  * array values in parsing. Field types should use this class if their corresponding
  * mapper returns true for {@link FieldMapper#parsesArrayValue()}.
@@ -74,7 +74,7 @@ public abstract class ArraySourceValueFetcher implements ValueFetcher {
         for (String path : sourcePaths) {
             Object sourceValue = lookup.extractValue(path, nullValue);
             if (sourceValue == null) {
-                return org.opensearch.common.collect.List.of();
+                return List.of();
             }
             values.addAll((List<?>) parseSourceValue(sourceValue));
         }

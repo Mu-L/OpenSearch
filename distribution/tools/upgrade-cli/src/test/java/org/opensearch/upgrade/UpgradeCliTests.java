@@ -10,17 +10,17 @@ package org.opensearch.upgrade;
 
 import com.google.common.jimfs.Configuration;
 import com.google.common.jimfs.Jimfs;
-import org.junit.After;
-import org.junit.Before;
 import org.opensearch.cli.Command;
 import org.opensearch.cli.CommandTestCase;
 import org.opensearch.common.SuppressForbidden;
 import org.opensearch.common.io.PathUtilsForTesting;
 import org.opensearch.common.settings.KeyStoreWrapper;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.core.internal.io.IOUtils;
+import org.opensearch.common.util.io.IOUtils;
 import org.opensearch.env.Environment;
 import org.opensearch.env.TestEnvironment;
+import org.junit.After;
+import org.junit.Before;
 
 import java.io.File;
 import java.io.IOException;

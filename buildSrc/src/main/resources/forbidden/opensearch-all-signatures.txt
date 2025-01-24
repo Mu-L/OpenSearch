@@ -17,6 +17,9 @@
 java.nio.file.Paths @ Use org.opensearch.common.io.PathUtils.get() instead.
 java.nio.file.FileSystems#getDefault() @ use org.opensearch.common.io.PathUtils.getDefaultFileSystem() instead.
 
+joptsimple.internal.Strings @ use org.opensearch.core.common.Strings instead.
+org.apache.logging.log4j.util.Strings @ use org.opensearch.core.common.Strings instead.
+
 java.nio.file.Files#getFileStore(java.nio.file.Path) @ Use org.opensearch.env.Environment.getFileStore() instead, impacted by JDK-8034057
 java.nio.file.Files#isWritable(java.nio.file.Path) @ Use org.opensearch.env.Environment.isWritable() instead, impacted by JDK-8034057
 
@@ -50,6 +53,7 @@ java.nio.channels.SocketChannel#connect(java.net.SocketAddress)
 java.lang.Boolean#getBoolean(java.lang.String)
 
 org.apache.lucene.util.IOUtils @ use @org.opensearch.core.internal.io instead
+org.apache.lucene.util.SetOnce @ use @org.opensearch.common.SetOnce instead
 
 @defaultMessage use executors from org.opensearch.common.util.concurrent.OpenSearchExecutors instead which will properly bubble up Errors
 java.util.concurrent.AbstractExecutorService#<init>()

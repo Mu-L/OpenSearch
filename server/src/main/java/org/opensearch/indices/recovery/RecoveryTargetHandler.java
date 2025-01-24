@@ -31,7 +31,7 @@
 
 package org.opensearch.indices.recovery;
 
-import org.opensearch.action.ActionListener;
+import org.opensearch.core.action.ActionListener;
 import org.opensearch.index.seqno.ReplicationTracker;
 import org.opensearch.index.seqno.RetentionLeases;
 import org.opensearch.index.store.Store;
@@ -55,12 +55,11 @@ public interface RecoveryTargetHandler extends FileChunkWriter {
 
     /**
      * Used with Segment replication only
-     *
+     * <p>
      * This function is used to force a sync target primary node with source (old primary). This is to avoid segment files
      * conflict with replicas when target is promoted as primary.
-     * @param listener segment replication event listener
      */
-    void forceSegmentFileSync(ActionListener<Void> listener);
+    void forceSegmentFileSync();
 
     /**
      * The finalize request refreshes the engine now that new segments are available, enables garbage collection of tombstone files, updates

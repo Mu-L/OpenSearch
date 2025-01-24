@@ -32,14 +32,15 @@
 package org.opensearch.search.aggregations.support;
 
 import org.opensearch.Version;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.xcontent.AbstractObjectParser;
-import org.opensearch.common.xcontent.ObjectParser;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.xcontent.AbstractObjectParser;
+import org.opensearch.core.xcontent.ObjectParser;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.query.QueryShardContext;
+import org.opensearch.index.query.WithFieldName;
 import org.opensearch.script.Script;
 import org.opensearch.search.aggregations.AbstractAggregationBuilder;
 import org.opensearch.search.aggregations.AggregationInitializationException;
@@ -57,7 +58,9 @@ import java.util.Objects;
  *
  * @opensearch.internal
  */
-public abstract class ValuesSourceAggregationBuilder<AB extends ValuesSourceAggregationBuilder<AB>> extends AbstractAggregationBuilder<AB> {
+public abstract class ValuesSourceAggregationBuilder<AB extends ValuesSourceAggregationBuilder<AB>> extends AbstractAggregationBuilder<AB>
+    implements
+        WithFieldName {
 
     public static <T> void declareFields(
         AbstractObjectParser<? extends ValuesSourceAggregationBuilder<?>, T> objectParser,
@@ -264,7 +267,7 @@ public abstract class ValuesSourceAggregationBuilder<AB extends ValuesSourceAggr
 
     /**
      * DO NOT OVERRIDE THIS!
-     *
+     * <p>
      * This method only exists for legacy support.  No new aggregations need this, nor should they override it.
      *
      * @param version For backwards compatibility, subclasses can change behavior based on the version
@@ -290,6 +293,11 @@ public abstract class ValuesSourceAggregationBuilder<AB extends ValuesSourceAggr
      */
     public String field() {
         return field;
+    }
+
+    @Override
+    public String fieldName() {
+        return field();
     }
 
     /**

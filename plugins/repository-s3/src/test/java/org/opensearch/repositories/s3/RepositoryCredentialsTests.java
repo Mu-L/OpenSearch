@@ -32,12 +32,13 @@
 
 package org.opensearch.repositories.s3;
 
-import com.amazonaws.auth.AWSCredentials;
-import com.amazonaws.auth.AWSCredentialsProvider;
-import com.amazonaws.services.s3.AmazonS3;
+import software.amazon.awssdk.auth.credentials.AwsCredentials;
+import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
+import software.amazon.awssdk.services.s3.DelegatingS3Client;
+import software.amazon.awssdk.services.s3.S3Client;
+
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-
 import org.opensearch.client.node.NodeClient;
 import org.opensearch.cluster.metadata.RepositoryMetadata;
 import org.opensearch.cluster.service.ClusterService;
@@ -45,7 +46,7 @@ import org.opensearch.common.SuppressForbidden;
 import org.opensearch.common.settings.MockSecureSettings;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.settings.SettingsFilter;
-import org.opensearch.common.xcontent.NamedXContentRegistry;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
 import org.opensearch.indices.recovery.RecoverySettings;
 import org.opensearch.plugins.Plugin;
 import org.opensearch.plugins.PluginsService;
@@ -54,9 +55,11 @@ import org.opensearch.rest.AbstractRestChannel;
 import org.opensearch.rest.RestRequest;
 import org.opensearch.rest.RestResponse;
 import org.opensearch.rest.action.admin.cluster.RestGetRepositoriesAction;
+import org.opensearch.test.OpenSearchIntegTestCase;
 import org.opensearch.test.OpenSearchSingleNodeTestCase;
 import org.opensearch.test.rest.FakeRestRequest;
 
+import java.nio.file.Path;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.util.Collection;
@@ -66,15 +69,15 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.opensearch.repositories.s3.S3ClientSettings.ACCESS_KEY_SETTING;
 import static org.opensearch.repositories.s3.S3ClientSettings.SECRET_KEY_SETTING;
-import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertAcked;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 
+@SuppressWarnings("removal")
 @SuppressForbidden(reason = "test requires to set a System property to allow insecure settings when running in IDE")
-public class RepositoryCredentialsTests extends OpenSearchSingleNodeTestCase {
+public class RepositoryCredentialsTests extends OpenSearchSingleNodeTestCase implements ConfigPathSupport {
 
     static {
         AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
@@ -106,6 +109,7 @@ public class RepositoryCredentialsTests extends OpenSearchSingleNodeTestCase {
     }
 
     public void testRepositoryCredentialsOverrideSecureCredentials() {
+        SocketAccess.doPrivileged(() -> System.setProperty("opensearch.path.conf", configPath().toString()));
         final String repositoryName = "repo-creds-override";
         final Settings.Builder repositorySettings = Settings.builder()
             // repository settings for credentials override node secure settings
@@ -123,12 +127,14 @@ public class RepositoryCredentialsTests extends OpenSearchSingleNodeTestCase {
         assertThat(repositories.repository(repositoryName), instanceOf(S3Repository.class));
 
         final S3Repository repository = (S3Repository) repositories.repository(repositoryName);
-        final AmazonS3 client = repository.createBlobStore().clientReference().get();
-        assertThat(client, instanceOf(ProxyS3RepositoryPlugin.ClientAndCredentials.class));
+        try (final AmazonS3Reference clientReference = repository.createBlobStore().clientReference()) {
+            S3Client client = clientReference.get();
+            assertThat(client, instanceOf(ProxyS3RepositoryPlugin.ClientAndCredentials.class));
 
-        final AWSCredentials credentials = ((ProxyS3RepositoryPlugin.ClientAndCredentials) client).credentials.getCredentials();
-        assertThat(credentials.getAWSAccessKeyId(), is("insecure_aws_key"));
-        assertThat(credentials.getAWSSecretKey(), is("insecure_aws_secret"));
+            final AwsCredentials credentials = ((ProxyS3RepositoryPlugin.ClientAndCredentials) client).credentials.resolveCredentials();
+            assertThat(credentials.accessKeyId(), is("insecure_aws_key"));
+            assertThat(credentials.secretAccessKey(), is("insecure_aws_secret"));
+        }
 
         assertWarnings(
             "[secret_key] setting was deprecated in OpenSearch and will be removed in a future release!"
@@ -141,6 +147,7 @@ public class RepositoryCredentialsTests extends OpenSearchSingleNodeTestCase {
     }
 
     public void testReinitSecureCredentials() {
+        SocketAccess.doPrivileged(() -> System.setProperty("opensearch.path.conf", configPath().toString()));
         final String clientName = randomFrom("default", "other");
 
         final Settings.Builder repositorySettings = Settings.builder();
@@ -162,19 +169,19 @@ public class RepositoryCredentialsTests extends OpenSearchSingleNodeTestCase {
 
         final S3Repository repository = (S3Repository) repositories.repository(repositoryName);
         try (AmazonS3Reference clientReference = ((S3BlobStore) repository.blobStore()).clientReference()) {
-            final AmazonS3 client = clientReference.get();
+            final S3Client client = clientReference.get();
             assertThat(client, instanceOf(ProxyS3RepositoryPlugin.ClientAndCredentials.class));
 
-            final AWSCredentials credentials = ((ProxyS3RepositoryPlugin.ClientAndCredentials) client).credentials.getCredentials();
+            final AwsCredentials credentials = ((ProxyS3RepositoryPlugin.ClientAndCredentials) client).credentials.resolveCredentials();
             if (hasInsecureSettings) {
-                assertThat(credentials.getAWSAccessKeyId(), is("insecure_aws_key"));
-                assertThat(credentials.getAWSSecretKey(), is("insecure_aws_secret"));
+                assertThat(credentials.accessKeyId(), is("insecure_aws_key"));
+                assertThat(credentials.secretAccessKey(), is("insecure_aws_secret"));
             } else if ("other".equals(clientName)) {
-                assertThat(credentials.getAWSAccessKeyId(), is("secure_other_key"));
-                assertThat(credentials.getAWSSecretKey(), is("secure_other_secret"));
+                assertThat(credentials.accessKeyId(), is("secure_other_key"));
+                assertThat(credentials.secretAccessKey(), is("secure_other_secret"));
             } else {
-                assertThat(credentials.getAWSAccessKeyId(), is("secure_default_key"));
-                assertThat(credentials.getAWSSecretKey(), is("secure_default_secret"));
+                assertThat(credentials.accessKeyId(), is("secure_default_key"));
+                assertThat(credentials.secretAccessKey(), is("secure_default_secret"));
             }
 
             // new settings
@@ -189,29 +196,29 @@ public class RepositoryCredentialsTests extends OpenSearchSingleNodeTestCase {
 
             // check the not-yet-closed client reference still has the same credentials
             if (hasInsecureSettings) {
-                assertThat(credentials.getAWSAccessKeyId(), is("insecure_aws_key"));
-                assertThat(credentials.getAWSSecretKey(), is("insecure_aws_secret"));
+                assertThat(credentials.accessKeyId(), is("insecure_aws_key"));
+                assertThat(credentials.secretAccessKey(), is("insecure_aws_secret"));
             } else if ("other".equals(clientName)) {
-                assertThat(credentials.getAWSAccessKeyId(), is("secure_other_key"));
-                assertThat(credentials.getAWSSecretKey(), is("secure_other_secret"));
+                assertThat(credentials.accessKeyId(), is("secure_other_key"));
+                assertThat(credentials.secretAccessKey(), is("secure_other_secret"));
             } else {
-                assertThat(credentials.getAWSAccessKeyId(), is("secure_default_key"));
-                assertThat(credentials.getAWSSecretKey(), is("secure_default_secret"));
+                assertThat(credentials.accessKeyId(), is("secure_default_key"));
+                assertThat(credentials.secretAccessKey(), is("secure_default_secret"));
             }
         }
 
         // check credentials have been updated
         try (AmazonS3Reference clientReference = ((S3BlobStore) repository.blobStore()).clientReference()) {
-            final AmazonS3 client = clientReference.get();
+            final S3Client client = clientReference.get();
             assertThat(client, instanceOf(ProxyS3RepositoryPlugin.ClientAndCredentials.class));
 
-            final AWSCredentials newCredentials = ((ProxyS3RepositoryPlugin.ClientAndCredentials) client).credentials.getCredentials();
+            final AwsCredentials newCredentials = ((ProxyS3RepositoryPlugin.ClientAndCredentials) client).credentials.resolveCredentials();
             if (hasInsecureSettings) {
-                assertThat(newCredentials.getAWSAccessKeyId(), is("insecure_aws_key"));
-                assertThat(newCredentials.getAWSSecretKey(), is("insecure_aws_secret"));
+                assertThat(newCredentials.accessKeyId(), is("insecure_aws_key"));
+                assertThat(newCredentials.secretAccessKey(), is("insecure_aws_secret"));
             } else {
-                assertThat(newCredentials.getAWSAccessKeyId(), is("new_secret_aws_key"));
-                assertThat(newCredentials.getAWSSecretKey(), is("new_secret_aws_secret"));
+                assertThat(newCredentials.accessKeyId(), is("new_secret_aws_key"));
+                assertThat(newCredentials.secretAccessKey(), is("new_secret_aws_secret"));
             }
         }
 
@@ -228,6 +235,7 @@ public class RepositoryCredentialsTests extends OpenSearchSingleNodeTestCase {
     }
 
     public void testInsecureRepositoryCredentials() throws Exception {
+        SocketAccess.doPrivileged(() -> System.setProperty("opensearch.path.conf", configPath().toString()));
         final String repositoryName = "repo-insecure-creds";
         createRepository(
             repositoryName,
@@ -269,14 +277,8 @@ public class RepositoryCredentialsTests extends OpenSearchSingleNodeTestCase {
     }
 
     private void createRepository(final String name, final Settings repositorySettings) {
-        assertAcked(
-            client().admin()
-                .cluster()
-                .preparePutRepository(name)
-                .setType(S3Repository.TYPE)
-                .setVerify(false)
-                .setSettings(repositorySettings)
-        );
+        Settings.Builder settings = Settings.builder().put(repositorySettings);
+        OpenSearchIntegTestCase.putRepository(client().admin().cluster(), name, S3Repository.TYPE, false, settings);
     }
 
     /**
@@ -284,8 +286,8 @@ public class RepositoryCredentialsTests extends OpenSearchSingleNodeTestCase {
      */
     public static final class ProxyS3RepositoryPlugin extends S3RepositoryPlugin {
 
-        public ProxyS3RepositoryPlugin(Settings settings) {
-            super(settings, new ProxyS3Service());
+        public ProxyS3RepositoryPlugin(Settings settings, Path configPath) {
+            super(settings, configPath, new ProxyS3Service(configPath), new S3AsyncService(configPath));
         }
 
         @Override
@@ -295,7 +297,22 @@ public class RepositoryCredentialsTests extends OpenSearchSingleNodeTestCase {
             ClusterService clusterService,
             RecoverySettings recoverySettings
         ) {
-            return new S3Repository(metadata, registry, service, clusterService, recoverySettings) {
+            return new S3Repository(
+                metadata,
+                registry,
+                service,
+                clusterService,
+                recoverySettings,
+                null,
+                null,
+                null,
+                null,
+                null,
+                false,
+                null,
+                null,
+                null
+            ) {
                 @Override
                 protected void assertSnapshotOrGenericThread() {
                     // eliminate thread name check as we create repo manually on test/main threads
@@ -303,10 +320,10 @@ public class RepositoryCredentialsTests extends OpenSearchSingleNodeTestCase {
             };
         }
 
-        public static final class ClientAndCredentials extends AmazonS3Wrapper {
-            final AWSCredentialsProvider credentials;
+        public static final class ClientAndCredentials extends DelegatingS3Client {
+            final AwsCredentialsProvider credentials;
 
-            ClientAndCredentials(AmazonS3 delegate, AWSCredentialsProvider credentials) {
+            ClientAndCredentials(S3Client delegate, AwsCredentialsProvider credentials) {
                 super(delegate);
                 this.credentials = credentials;
             }
@@ -316,10 +333,14 @@ public class RepositoryCredentialsTests extends OpenSearchSingleNodeTestCase {
 
             private static final Logger logger = LogManager.getLogger(ProxyS3Service.class);
 
+            ProxyS3Service(final Path configPath) {
+                super(configPath);
+            }
+
             @Override
             AmazonS3WithCredentials buildClient(final S3ClientSettings clientSettings) {
-                final AmazonS3WithCredentials client = super.buildClient(clientSettings);
-                final AWSCredentialsProvider credentials = buildCredentials(logger, clientSettings);
+                final AmazonS3WithCredentials client = SocketAccess.doPrivileged(() -> super.buildClient(clientSettings));
+                final AwsCredentialsProvider credentials = buildCredentials(logger, clientSettings);
                 return AmazonS3WithCredentials.create(new ClientAndCredentials(client.client(), credentials), credentials);
             }
 

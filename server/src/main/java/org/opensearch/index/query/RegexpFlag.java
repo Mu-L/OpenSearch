@@ -32,7 +32,7 @@
 package org.opensearch.index.query;
 
 import org.apache.lucene.util.automaton.RegExp;
-import org.opensearch.common.Strings;
+import org.opensearch.core.common.Strings;
 
 import java.util.Locale;
 
@@ -63,7 +63,7 @@ public enum RegexpFlag {
     /**
      * Enables complement expression of the form: {@code ~&lt;expression&gt;}
      */
-    COMPLEMENT(RegExp.COMPLEMENT),
+    COMPLEMENT(RegExp.DEPRECATED_COMPLEMENT),
 
     /**
      * Enables empty language expression: {@code #}

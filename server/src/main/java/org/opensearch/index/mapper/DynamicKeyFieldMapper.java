@@ -43,14 +43,11 @@ import org.apache.lucene.document.FieldType;
  *   to {@link DynamicKeyFieldMapper#keyedFieldType(String)}, with 'some_key' passed as the
  *   argument. The field mapper is allowed to create a new field type dynamically in order
  *   to handle the search.
- *
+ * <p>
  * To prevent conflicts between these dynamic sub-keys and multi-fields, any field mappers
  * implementing this interface should explicitly disallow multi-fields. The constructor makes
  * sure to passes an empty multi-fields list to help prevent conflicting sub-keys from being
  * registered.
- *
- * Note: we anticipate that 'flattened' fields will be the only implementation of this
- * interface. Flattened object fields live in the 'mapper-flattened' module.
  *
  * @opensearch.internal
  */

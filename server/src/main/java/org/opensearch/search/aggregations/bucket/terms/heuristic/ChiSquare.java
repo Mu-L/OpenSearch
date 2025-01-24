@@ -32,9 +32,9 @@
 
 package org.opensearch.search.aggregations.bucket.terms.heuristic;
 
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.xcontent.ConstructingObjectParser;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.xcontent.ConstructingObjectParser;
+import org.opensearch.core.xcontent.XContentBuilder;
 
 import java.io.IOException;
 

@@ -33,8 +33,8 @@ package org.opensearch.test.rest.yaml.section;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.opensearch.common.xcontent.XContentLocation;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.xcontent.XContentLocation;
+import org.opensearch.core.xcontent.XContentParser;
 
 import java.io.IOException;
 
@@ -46,7 +46,7 @@ import static org.junit.Assert.assertThat;
 
 /**
  * Represents an is_true assert section:
- *
+ * <p>
  *   - is_true:  get.fields.bar
  *
  */

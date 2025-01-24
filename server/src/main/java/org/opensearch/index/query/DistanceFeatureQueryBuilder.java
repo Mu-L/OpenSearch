@@ -33,23 +33,23 @@
 package org.opensearch.index.query;
 
 import org.apache.lucene.search.Query;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.ParsingException;
 import org.opensearch.common.geo.GeoPoint;
 import org.opensearch.common.geo.GeoUtils;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
 import org.opensearch.common.lucene.search.Queries;
-import org.opensearch.common.xcontent.ConstructingObjectParser;
-import org.opensearch.common.xcontent.ObjectParser;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.ParsingException;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.xcontent.ConstructingObjectParser;
+import org.opensearch.core.xcontent.ObjectParser;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.mapper.MappedFieldType;
 
 import java.io.IOException;
 import java.util.Objects;
 
-import static org.opensearch.common.xcontent.ConstructingObjectParser.constructorArg;
+import static org.opensearch.core.xcontent.ConstructingObjectParser.constructorArg;
 
 /**
  * A query to boost scores based on their proximity to the given origin
@@ -57,7 +57,7 @@ import static org.opensearch.common.xcontent.ConstructingObjectParser.constructo
  *
  * @opensearch.internal
  */
-public class DistanceFeatureQueryBuilder extends AbstractQueryBuilder<DistanceFeatureQueryBuilder> {
+public class DistanceFeatureQueryBuilder extends AbstractQueryBuilder<DistanceFeatureQueryBuilder> implements WithFieldName {
     public static final String NAME = "distance_feature";
 
     private static final ParseField FIELD_FIELD = new ParseField("field");
@@ -136,7 +136,8 @@ public class DistanceFeatureQueryBuilder extends AbstractQueryBuilder<DistanceFe
         return fieldType.distanceFeatureQuery(origin.origin(), pivot, 1.0f, context);
     }
 
-    String fieldName() {
+    @Override
+    public String fieldName() {
         return field;
     }
 

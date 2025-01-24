@@ -38,19 +38,24 @@ import org.opensearch.OpenSearchParseException;
 import org.opensearch.Version;
 import org.opensearch.common.Booleans;
 import org.opensearch.common.Nullable;
-import org.opensearch.common.Strings;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.collect.Tuple;
 import org.opensearch.common.regex.Regex;
-import org.opensearch.common.unit.ByteSizeValue;
 import org.opensearch.common.unit.MemorySizeValue;
 import org.opensearch.common.unit.TimeValue;
-import org.opensearch.common.xcontent.DeprecationHandler;
-import org.opensearch.common.xcontent.NamedXContentRegistry;
-import org.opensearch.common.xcontent.ToXContentObject;
-import org.opensearch.common.xcontent.XContentBuilder;
 import org.opensearch.common.xcontent.XContentFactory;
-import org.opensearch.common.xcontent.XContentParser;
-import org.opensearch.common.xcontent.XContentType;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.common.unit.ByteSizeUnit;
+import org.opensearch.core.common.unit.ByteSizeValue;
+import org.opensearch.core.xcontent.DeprecationHandler;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
+import org.opensearch.core.xcontent.ToXContentObject;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -98,15 +103,17 @@ import java.util.stream.Stream;
  * }
  * </pre>
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class Setting<T> implements ToXContentObject {
 
     /**
      * Property of the setting
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     public enum Property {
         /**
          * should be filtered in some api (mask password/credentials)
@@ -159,15 +166,26 @@ public class Setting<T> implements ToXContentObject {
         /**
          * Indicates an index-level setting that is privately managed. Such a setting can not even be set on index creation.
          */
-        PrivateIndex
+        PrivateIndex,
+
+        /**
+         * Extension scope
+         */
+        ExtensionScope,
+
+        /**
+         * Mark this setting as immutable on snapshot restore
+         * i.e. the setting will not be allowed to be removed or modified during restore
+         */
+        UnmodifiableOnRestore
     }
 
     private final Key key;
     protected final Function<Settings, String> defaultValue;
     @Nullable
     protected final Setting<T> fallbackSetting;
-    private final Function<String, T> parser;
-    private final Validator<T> validator;
+    protected final Function<String, T> parser;
+    protected final Validator<T> validator;
     private final EnumSet<Property> properties;
 
     private static final EnumSet<Property> EMPTY_PROPERTIES = EnumSet.noneOf(Property.class);
@@ -196,10 +214,13 @@ public class Setting<T> implements ToXContentObject {
             final EnumSet<Property> propertiesAsSet = EnumSet.copyOf(Arrays.asList(properties));
             if (propertiesAsSet.contains(Property.Dynamic) && propertiesAsSet.contains(Property.Final)) {
                 throw new IllegalArgumentException("final setting [" + key + "] cannot be dynamic");
+            } else if (propertiesAsSet.contains(Property.UnmodifiableOnRestore) && propertiesAsSet.contains(Property.Dynamic)) {
+                throw new IllegalArgumentException("UnmodifiableOnRestore setting [" + key + "] cannot be dynamic");
             }
             checkPropertyRequiresIndexScope(propertiesAsSet, Property.NotCopyableOnResize);
             checkPropertyRequiresIndexScope(propertiesAsSet, Property.InternalIndex);
             checkPropertyRequiresIndexScope(propertiesAsSet, Property.PrivateIndex);
+            checkPropertyRequiresIndexScope(propertiesAsSet, Property.UnmodifiableOnRestore);
             checkPropertyRequiresNodeScope(propertiesAsSet, Property.Consistent);
             this.properties = propertiesAsSet;
         }
@@ -334,6 +355,10 @@ public class Setting<T> implements ToXContentObject {
      */
     public final boolean isFinal() {
         return properties.contains(Property.Final);
+    }
+
+    public final boolean isUnmodifiableOnRestore() {
+        return properties.contains(Property.UnmodifiableOnRestore);
     }
 
     public final boolean isInternalIndex() {
@@ -594,7 +619,7 @@ public class Setting<T> implements ToXContentObject {
 
     @Override
     public String toString() {
-        return Strings.toString(this, true, true);
+        return Strings.toString(MediaTypeRegistry.JSON, this, true, true);
     }
 
     /**
@@ -626,8 +651,9 @@ public class Setting<T> implements ToXContentObject {
      * Allows a setting to declare a dependency on another setting being set. Optionally, a setting can validate the value of the dependent
      * setting.
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     public interface SettingDependency {
 
         /**
@@ -775,8 +801,9 @@ public class Setting<T> implements ToXContentObject {
     /**
      * Allows an affix setting to declare a dependency on another affix setting.
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     public interface AffixSettingDependency extends SettingDependency {
 
         @Override
@@ -787,8 +814,9 @@ public class Setting<T> implements ToXContentObject {
     /**
      * An affix setting
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     public static class AffixSetting<T> extends Setting<T> {
         private final AffixKey key;
         private final BiFunction<String, String, Setting<T>> delegateFactory;
@@ -963,6 +991,9 @@ public class Setting<T> implements ToXContentObject {
          * Get a setting with the given namespace filled in for prefix and suffix.
          */
         public Setting<T> getConcreteSettingForNamespace(String namespace) {
+            if (namespace == null) {
+                throw new IllegalArgumentException("Namespace should not be null");
+            }
             String fullKey = key.toConcreteKey(namespace).toString();
             return getConcreteSetting(namespace, fullKey);
         }
@@ -1017,9 +1048,10 @@ public class Setting<T> implements ToXContentObject {
      *
      * @param <T> the type of the {@link Setting}
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
     @FunctionalInterface
+    @PublicApi(since = "1.0.0")
     public interface Validator<T> {
 
         /**
@@ -1096,7 +1128,7 @@ public class Setting<T> implements ToXContentObject {
                 builder.startObject();
                 subSettings.toXContent(builder, EMPTY_PARAMS);
                 builder.endObject();
-                return Strings.toString(builder);
+                return builder.toString();
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
@@ -1247,6 +1279,55 @@ public class Setting<T> implements ToXContentObject {
         return properties != null && Arrays.asList(properties).contains(Property.Filtered);
     }
 
+    /**
+     * A writeable validator able to check the value of string type custom setting by using regular expression
+     */
+    public static class RegexValidator implements Writeable, Validator<String> {
+        private Pattern pattern;
+
+        private boolean isMatching;
+
+        /**
+         * @param regex A regular expression containing the only valid input for this setting.
+         */
+        public RegexValidator(String regex) {
+            this(regex, true);
+        }
+
+        /**
+         * @param regex constructs a validator based on a regular expression.
+         * @param isMatching If true, the setting must match the given regex. If false, the setting must not match the given regex.
+         */
+        public RegexValidator(String regex, boolean isMatching) {
+            this.pattern = Pattern.compile(regex);
+            this.isMatching = isMatching;
+        }
+
+        public RegexValidator(StreamInput in) throws IOException {
+            this.pattern = Pattern.compile(in.readString());
+            this.isMatching = in.readBoolean();
+        }
+
+        Pattern getPattern() {
+            return pattern;
+        }
+
+        @Override
+        public void validate(String value) {
+            if (isMatching && !pattern.matcher(value).find()) {
+                throw new IllegalArgumentException("Setting [" + value + "] does not match regex [" + pattern.pattern() + "]");
+            } else if (!isMatching && pattern.matcher(value).find()) {
+                throw new IllegalArgumentException("Setting [" + value + "] must match regex [" + pattern.pattern() + "]");
+            }
+        }
+
+        @Override
+        public void writeTo(StreamOutput out) throws IOException {
+            out.writeString(pattern.pattern());
+            out.writeBoolean(isMatching);
+        }
+    }
+
     // Float
 
     private static float parseFloat(String s, float minValue, float maxValue, String key, boolean isFiltered) {
@@ -1287,10 +1368,78 @@ public class Setting<T> implements ToXContentObject {
         return new Setting<>(
             key,
             Float.toString(defaultValue),
-            (s) -> parseFloat(s, minValue, maxValue, key, isFiltered(properties)),
+            new FloatParser(minValue, maxValue, key, isFiltered(properties)),
             validator,
             properties
         );
+    }
+
+    /**
+     * A writeable parser for float
+     *
+     */
+    public static class FloatParser implements Function<String, Float>, Writeable {
+        private float minValue;
+        private float maxValue;
+        private String key;
+        private boolean isFiltered;
+
+        public FloatParser(float minValue, float maxValue, String key, boolean isFiltered) {
+            this.minValue = minValue;
+            this.maxValue = maxValue;
+            this.key = key;
+            this.isFiltered = isFiltered;
+        }
+
+        public FloatParser(StreamInput in) throws IOException {
+            minValue = in.readFloat();
+            maxValue = in.readFloat();
+            key = in.readString();
+            isFiltered = in.readBoolean();
+        }
+
+        @Override
+        public void writeTo(StreamOutput out) throws IOException {
+            out.writeFloat(minValue);
+            out.writeFloat(maxValue);
+            out.writeString(key);
+            out.writeBoolean(isFiltered);
+        }
+
+        public float getMin() {
+            return minValue;
+        }
+
+        public float getMax() {
+            return maxValue;
+        }
+
+        public String getKey() {
+            return key;
+        }
+
+        public boolean getFilterStatus() {
+            return isFiltered;
+        }
+
+        @Override
+        public Float apply(String s) {
+            return parseFloat(s, minValue, maxValue, key, isFiltered);
+        }
+
+        public boolean equals(Object obj) {
+            if (this == obj) return true;
+            if (obj == null || getClass() != obj.getClass()) return false;
+            FloatParser that = (FloatParser) obj;
+            return Objects.equals(key, that.key)
+                && Objects.equals(minValue, that.minValue)
+                && Objects.equals(maxValue, that.maxValue)
+                && Objects.equals(isFiltered, that.isFiltered);
+        }
+
+        public int hashCode() {
+            return Objects.hash(minValue, maxValue, key, isFiltered);
+        }
     }
 
     // Setting<Float> with fallback
@@ -1389,10 +1538,78 @@ public class Setting<T> implements ToXContentObject {
         return new Setting<>(
             key,
             Integer.toString(defaultValue),
-            (s) -> parseInt(s, minValue, maxValue, key, isFiltered(properties)),
+            new IntegerParser(minValue, maxValue, key, isFiltered(properties)),
             validator,
             properties
         );
+    }
+
+    /**
+     * A writeable parser for integer
+     *
+     */
+    public static class IntegerParser implements Function<String, Integer>, Writeable {
+        private String key;
+        private int minValue;
+        private int maxValue;
+        private boolean isFiltered;
+
+        public IntegerParser(int minValue, int maxValue, String key, boolean isFiltered) {
+            this.minValue = minValue;
+            this.maxValue = maxValue;
+            this.key = key;
+            this.isFiltered = isFiltered;
+        }
+
+        public IntegerParser(StreamInput in) throws IOException {
+            minValue = in.readInt();
+            maxValue = in.readInt();
+            key = in.readString();
+            isFiltered = in.readBoolean();
+        }
+
+        @Override
+        public void writeTo(StreamOutput out) throws IOException {
+            out.writeInt(minValue);
+            out.writeInt(maxValue);
+            out.writeString(key);
+            out.writeBoolean(isFiltered);
+        }
+
+        public int getMin() {
+            return minValue;
+        }
+
+        public int getMax() {
+            return maxValue;
+        }
+
+        public String getKey() {
+            return key;
+        }
+
+        public boolean getFilterStatus() {
+            return isFiltered;
+        }
+
+        @Override
+        public Integer apply(String s) {
+            return parseInt(s, minValue, maxValue, key, isFiltered);
+        }
+
+        public boolean equals(Object obj) {
+            if (this == obj) return true;
+            if (obj == null || getClass() != obj.getClass()) return false;
+            IntegerParser that = (IntegerParser) obj;
+            return Objects.equals(key, that.key)
+                && Objects.equals(minValue, that.minValue)
+                && Objects.equals(maxValue, that.maxValue)
+                && Objects.equals(isFiltered, that.isFiltered);
+        }
+
+        public int hashCode() {
+            return Objects.hash(minValue, maxValue, key, isFiltered);
+        }
     }
 
     // Setting<Integer> with fallback
@@ -1483,10 +1700,78 @@ public class Setting<T> implements ToXContentObject {
         return new Setting<>(
             key,
             Long.toString(defaultValue),
-            (s) -> parseLong(s, minValue, maxValue, key, isFiltered(properties)),
+            new LongParser(minValue, maxValue, key, isFiltered(properties)),
             validator,
             properties
         );
+    }
+
+    /**
+     * A writeable parser for long
+     *
+     */
+    public static class LongParser implements Function<String, Long>, Writeable {
+        private String key;
+        private long minValue;
+        private long maxValue;
+        private boolean isFiltered;
+
+        public LongParser(long minValue, long maxValue, String key, boolean isFiltered) {
+            this.minValue = minValue;
+            this.maxValue = maxValue;
+            this.key = key;
+            this.isFiltered = isFiltered;
+        }
+
+        public LongParser(StreamInput in) throws IOException {
+            minValue = in.readLong();
+            maxValue = in.readLong();
+            key = in.readString();
+            isFiltered = in.readBoolean();
+        }
+
+        @Override
+        public void writeTo(StreamOutput out) throws IOException {
+            out.writeLong(minValue);
+            out.writeLong(maxValue);
+            out.writeString(key);
+            out.writeBoolean(isFiltered);
+        }
+
+        public long getMin() {
+            return minValue;
+        }
+
+        public long getMax() {
+            return maxValue;
+        }
+
+        public String getKey() {
+            return key;
+        }
+
+        public boolean getFilterStatus() {
+            return isFiltered;
+        }
+
+        @Override
+        public Long apply(String s) {
+            return parseLong(s, minValue, maxValue, key, isFiltered);
+        }
+
+        public boolean equals(Object obj) {
+            if (this == obj) return true;
+            if (obj == null || getClass() != obj.getClass()) return false;
+            LongParser that = (LongParser) obj;
+            return Objects.equals(key, that.key)
+                && Objects.equals(minValue, that.minValue)
+                && Objects.equals(maxValue, that.maxValue)
+                && Objects.equals(isFiltered, that.isFiltered);
+        }
+
+        public int hashCode() {
+            return Objects.hash(minValue, maxValue, key, isFiltered);
+        }
     }
 
     // Setting<Long> with fallback
@@ -1577,10 +1862,82 @@ public class Setting<T> implements ToXContentObject {
         return new Setting<>(
             key,
             Double.toString(defaultValue),
-            (s) -> parseDouble(s, minValue, maxValue, key, isFiltered(properties)),
+            new DoubleParser(minValue, maxValue, key, isFiltered(properties)),
             validator,
             properties
         );
+    }
+
+    public static Setting<Double> doubleSetting(String key, double defaultValue, Validator<Double> validator, Property... properties) {
+        return new Setting<>(key, Double.toString(defaultValue), Double::parseDouble, validator, properties);
+    }
+
+    /**
+     * A writeable parser for double
+     *
+     */
+    public static class DoubleParser implements Function<String, Double>, Writeable {
+        private double minValue;
+        private double maxValue;
+        private String key;
+        private boolean isFiltered;
+
+        public DoubleParser(double minValue, double maxValue, String key, boolean isFiltered) {
+            this.minValue = minValue;
+            this.maxValue = maxValue;
+            this.key = key;
+            this.isFiltered = isFiltered;
+        }
+
+        public DoubleParser(StreamInput in) throws IOException {
+            minValue = in.readDouble();
+            maxValue = in.readDouble();
+            key = in.readString();
+            isFiltered = in.readBoolean();
+        }
+
+        @Override
+        public void writeTo(StreamOutput out) throws IOException {
+            out.writeDouble(minValue);
+            out.writeDouble(maxValue);
+            out.writeString(key);
+            out.writeBoolean(isFiltered);
+        }
+
+        public double getMin() {
+            return minValue;
+        }
+
+        public double getMax() {
+            return maxValue;
+        }
+
+        public String getKey() {
+            return key;
+        }
+
+        public boolean getFilterStatus() {
+            return isFiltered;
+        }
+
+        @Override
+        public Double apply(String s) {
+            return parseDouble(s, minValue, maxValue, key, isFiltered);
+        }
+
+        public boolean equals(Object obj) {
+            if (this == obj) return true;
+            if (obj == null || getClass() != obj.getClass()) return false;
+            DoubleParser that = (DoubleParser) obj;
+            return Objects.equals(key, that.key)
+                && Objects.equals(minValue, that.minValue)
+                && Objects.equals(maxValue, that.maxValue)
+                && Objects.equals(isFiltered, that.isFiltered);
+        }
+
+        public int hashCode() {
+            return Objects.hash(minValue, maxValue, key, isFiltered);
+        }
     }
 
     // Setting<Double> with fallback
@@ -1619,6 +1976,15 @@ public class Setting<T> implements ToXContentObject {
             validator,
             properties
         );
+    }
+
+    public static Setting<Double> doubleSetting(
+        String key,
+        Setting<Double> fallbackSetting,
+        Validator<Double> validator,
+        Property... properties
+    ) {
+        return new Setting<>(new SimpleKey(key), fallbackSetting, fallbackSetting::getRaw, Double::parseDouble, validator, properties);
     }
 
     /// simpleString
@@ -1718,15 +2084,15 @@ public class Setting<T> implements ToXContentObject {
     }
 
     public static Setting<ByteSizeValue> byteSizeSetting(String key, ByteSizeValue value, Property... properties) {
-        return byteSizeSetting(key, (s) -> value.toString(), properties);
+        return byteSizeSetting(key, (s) -> value.getBytes() + ByteSizeUnit.BYTES.getSuffix(), properties);
     }
 
     public static Setting<ByteSizeValue> byteSizeSetting(String key, Setting<ByteSizeValue> fallbackSetting, Property... properties) {
-        return new Setting<>(key, fallbackSetting, (s) -> ByteSizeValue.parseBytesSizeValue(s, key), properties);
+        return new Setting<>(key, fallbackSetting, new ByteSizeValueParser(key), properties);
     }
 
     public static Setting<ByteSizeValue> byteSizeSetting(String key, Function<Settings, String> defaultValue, Property... properties) {
-        return new Setting<>(key, defaultValue, (s) -> ByteSizeValue.parseBytesSizeValue(s, key), properties);
+        return new Setting<>(key, defaultValue, new ByteSizeValueParser(key), properties);
     }
 
     public static Setting<ByteSizeValue> byteSizeSetting(
@@ -1746,7 +2112,68 @@ public class Setting<T> implements ToXContentObject {
         ByteSizeValue maxValue,
         Property... properties
     ) {
-        return new Setting<>(key, defaultValue, (s) -> parseByteSize(s, minValue, maxValue, key), properties);
+        return new Setting<>(key, defaultValue, new ByteSizeValueParser(minValue, maxValue, key), properties);
+    }
+
+    /**
+     * A writeable parser for bytesizevalue
+     *
+     */
+    public static class ByteSizeValueParser implements Function<String, ByteSizeValue>, Writeable {
+        private ByteSizeValue minValue;
+        private ByteSizeValue maxValue;
+        private String key;
+
+        public ByteSizeValueParser(ByteSizeValue minValue, ByteSizeValue maxValue, String key) {
+            this.minValue = minValue;
+            this.maxValue = maxValue;
+            this.key = key;
+        }
+
+        public ByteSizeValueParser(String key) {
+            this(new ByteSizeValue(-1), new ByteSizeValue(Long.MAX_VALUE), key);
+        }
+
+        public ByteSizeValueParser(StreamInput in) throws IOException {
+            minValue = new ByteSizeValue(in);
+            maxValue = new ByteSizeValue(in);
+            key = in.readString();
+        }
+
+        @Override
+        public void writeTo(StreamOutput out) throws IOException {
+            ((ByteSizeValue) minValue).writeTo(out);
+            ((ByteSizeValue) maxValue).writeTo(out);
+            out.writeString(key);
+        }
+
+        public ByteSizeValue getMin() {
+            return minValue;
+        }
+
+        public ByteSizeValue getMax() {
+            return maxValue;
+        }
+
+        public String getKey() {
+            return key;
+        }
+
+        @Override
+        public ByteSizeValue apply(String s) {
+            return parseByteSize(s, minValue, maxValue, key);
+        }
+
+        public boolean equals(Object obj) {
+            if (this == obj) return true;
+            if (obj == null || getClass() != obj.getClass()) return false;
+            ByteSizeValueParser that = (ByteSizeValueParser) obj;
+            return Objects.equals(key, that.key) && Objects.equals(minValue, that.minValue) && Objects.equals(maxValue, that.maxValue);
+        }
+
+        public int hashCode() {
+            return Objects.hash(key, minValue, maxValue);
+        }
     }
 
     public static ByteSizeValue parseByteSize(String s, ByteSizeValue minValue, ByteSizeValue maxValue, String key) {
@@ -1799,7 +2226,7 @@ public class Setting<T> implements ToXContentObject {
      * @return the setting object
      */
     public static Setting<ByteSizeValue> memorySizeSetting(String key, Function<Settings, String> defaultValue, Property... properties) {
-        return new Setting<>(key, defaultValue, (s) -> MemorySizeValue.parseBytesSizeValueOrHeapRatio(s, key), properties);
+        return new Setting<>(key, defaultValue, new MemorySizeValueParser(key), properties);
     }
 
     /**
@@ -1813,7 +2240,47 @@ public class Setting<T> implements ToXContentObject {
      * @return the setting object
      */
     public static Setting<ByteSizeValue> memorySizeSetting(String key, String defaultPercentage, Property... properties) {
-        return new Setting<>(key, (s) -> defaultPercentage, (s) -> MemorySizeValue.parseBytesSizeValueOrHeapRatio(s, key), properties);
+        return new Setting<>(key, (s) -> defaultPercentage, new MemorySizeValueParser(key), properties);
+    }
+
+    /**
+     * A writeable parser for memory size value
+     */
+    public static class MemorySizeValueParser implements Function<String, ByteSizeValue>, Writeable {
+        private String key;
+
+        public MemorySizeValueParser(String key) {
+            this.key = key;
+        }
+
+        public MemorySizeValueParser(StreamInput in) throws IOException {
+            key = in.readString();
+        }
+
+        @Override
+        public void writeTo(StreamOutput out) throws IOException {
+            out.writeString(key);
+        }
+
+        public String getKey() {
+            return key;
+        }
+
+        @Override
+        public ByteSizeValue apply(String s) {
+            return MemorySizeValue.parseBytesSizeValueOrHeapRatio(s, key);
+        }
+
+        public boolean equals(Object obj) {
+            if (this == obj) return true;
+            if (obj == null || getClass() != obj.getClass()) return false;
+            MemorySizeValueParser that = (MemorySizeValueParser) obj;
+            return Objects.equals(key, that.key);
+        }
+
+        public int hashCode() {
+            return Objects.hash(key);
+        }
     }
 
     /**
@@ -1907,7 +2374,7 @@ public class Setting<T> implements ToXContentObject {
     private static List<String> parseableStringToList(String parsableString) {
         // fromXContent doesn't use named xcontent or deprecation.
         try (
-            XContentParser xContentParser = XContentType.JSON.xContent()
+            XContentParser xContentParser = MediaTypeRegistry.JSON.xContent()
                 .createParser(NamedXContentRegistry.EMPTY, DeprecationHandler.THROW_UNSUPPORTED_OPERATION, parsableString)
         ) {
             XContentParser.Token token = xContentParser.nextToken();
@@ -1929,13 +2396,13 @@ public class Setting<T> implements ToXContentObject {
 
     private static String arrayToParsableString(List<String> array) {
         try {
-            XContentBuilder builder = XContentBuilder.builder(XContentType.JSON.xContent());
+            XContentBuilder builder = XContentBuilder.builder(MediaTypeRegistry.JSON.xContent());
             builder.startArray();
             for (String element : array) {
                 builder.value(element);
             }
             builder.endArray();
-            return Strings.toString(builder);
+            return builder.toString();
         } catch (IOException ex) {
             throw new OpenSearchException(ex);
         }
@@ -2073,6 +2540,63 @@ public class Setting<T> implements ToXContentObject {
         );
     }
 
+    /**
+     * A writeable parser for time value only has min value
+     *
+     */
+    public static class MinTimeValueParser implements Function<String, TimeValue>, Writeable {
+        private String key;
+        private TimeValue minValue;
+        private boolean isFiltered;
+
+        public MinTimeValueParser(String key, TimeValue minValue, boolean isFiltered) {
+            this.key = key;
+            this.minValue = minValue;
+            this.isFiltered = isFiltered;
+        }
+
+        public MinTimeValueParser(StreamInput in) throws IOException {
+            key = in.readString();
+            minValue = in.readTimeValue();
+            isFiltered = in.readBoolean();
+        }
+
+        @Override
+        public void writeTo(StreamOutput out) throws IOException {
+            out.writeString(key);
+            out.writeTimeValue(minValue);
+            out.writeBoolean(isFiltered);
+        }
+
+        public TimeValue getMin() {
+            return minValue;
+        }
+
+        public String getKey() {
+            return key;
+        }
+
+        public boolean getFilterStatus() {
+            return isFiltered;
+        }
+
+        @Override
+        public TimeValue apply(String s) {
+            return minTimeValueParser(key, minValue, isFiltered).apply(s);
+        }
+
+        public boolean equals(Object obj) {
+            if (this == obj) return true;
+            if (obj == null || getClass() != obj.getClass()) return false;
+            MinTimeValueParser that = (MinTimeValueParser) obj;
+            return Objects.equals(key, that.key) && Objects.equals(minValue, that.minValue) && Objects.equals(isFiltered, that.isFiltered);
+        }
+
+        public int hashCode() {
+            return Objects.hash(key, minValue, isFiltered);
+        }
+    }
+
     public static Setting<TimeValue> timeSetting(
         final String key,
         Function<Settings, TimeValue> defaultValue,
@@ -2083,7 +2607,7 @@ public class Setting<T> implements ToXContentObject {
         return new Setting<>(
             simpleKey,
             s -> defaultValue.apply(s).getStringRep(),
-            minTimeValueParser(key, minValue, isFiltered(properties)),
+            new MinTimeValueParser(key, minValue, isFiltered(properties)),
             properties
         );
     }
@@ -2099,9 +2623,77 @@ public class Setting<T> implements ToXContentObject {
         return new Setting<>(
             simpleKey,
             s -> defaultValue.getStringRep(),
-            minMaxTimeValueParser(key, minValue, maxValue, isFiltered(properties)),
+            new MinMaxTimeValueParser(key, minValue, maxValue, isFiltered(properties)),
             properties
         );
+    }
+
+    /**
+     * A writeable parser for time value have min and max value
+     *
+     */
+    public static class MinMaxTimeValueParser implements Function<String, TimeValue>, Writeable {
+        private String key;
+        private TimeValue minValue;
+        private TimeValue maxValue;
+        private boolean isFiltered;
+
+        public MinMaxTimeValueParser(String key, TimeValue minValue, TimeValue maxValue, boolean isFiltered) {
+            this.key = key;
+            this.minValue = minValue;
+            this.maxValue = maxValue;
+            this.isFiltered = isFiltered;
+        }
+
+        public MinMaxTimeValueParser(StreamInput in) throws IOException {
+            key = in.readString();
+            minValue = in.readTimeValue();
+            maxValue = in.readTimeValue();
+            isFiltered = in.readBoolean();
+        }
+
+        @Override
+        public void writeTo(StreamOutput out) throws IOException {
+            out.writeString(key);
+            out.writeTimeValue(minValue);
+            out.writeTimeValue(maxValue);
+            out.writeBoolean(isFiltered);
+        }
+
+        public TimeValue getMin() {
+            return minValue;
+        }
+
+        public TimeValue getMax() {
+            return maxValue;
+        }
+
+        public String getKey() {
+            return key;
+        }
+
+        public boolean getFilterStatus() {
+            return isFiltered;
+        }
+
+        @Override
+        public TimeValue apply(String s) {
+            return minMaxTimeValueParser(key, minValue, maxValue, isFiltered).apply(s);
+        }
+
+        public boolean equals(Object obj) {
+            if (this == obj) return true;
+            if (obj == null || getClass() != obj.getClass()) return false;
+            MinMaxTimeValueParser that = (MinMaxTimeValueParser) obj;
+            return Objects.equals(key, that.key)
+                && Objects.equals(minValue, that.minValue)
+                && Objects.equals(maxValue, that.maxValue)
+                && Objects.equals(isFiltered, that.isFiltered);
+        }
+
+        public int hashCode() {
+            return Objects.hash(key, minValue, maxValue, isFiltered);
+        }
     }
 
     private static Function<String, TimeValue> minTimeValueParser(final String key, final TimeValue minValue, boolean isFiltered) {
@@ -2175,6 +2767,23 @@ public class Setting<T> implements ToXContentObject {
 
     public static Setting<TimeValue> timeSetting(
         String key,
+        TimeValue defaultValue,
+        TimeValue minValue,
+        Validator<TimeValue> validator,
+        Property... properties
+    ) {
+        final SimpleKey simpleKey = new SimpleKey(key);
+        return new Setting<>(
+            simpleKey,
+            s -> defaultValue.getStringRep(),
+            minTimeValueParser(key, minValue, isFiltered(properties)),
+            validator,
+            properties
+        );
+    }
+
+    public static Setting<TimeValue> timeSetting(
+        String key,
         Setting<TimeValue> fallBackSetting,
         Validator<TimeValue> validator,
         Property... properties
@@ -2224,6 +2833,12 @@ public class Setting<T> implements ToXContentObject {
         return affixKeySetting(new AffixKey(prefix), delegateFactoryWithNamespace);
     }
 
+    public static <T> AffixSetting<T> suffixKeySetting(String suffix, Function<String, Setting<T>> delegateFactory) {
+        BiFunction<String, String, Setting<T>> delegateFactoryWithNamespace = (ns, k) -> delegateFactory.apply(k);
+        AffixKey affixKey = new AffixKey(null, suffix);
+        return affixKeySetting(affixKey, delegateFactoryWithNamespace);
+    }
+
     /**
      * This setting type allows to validate settings that have the same type and a common prefix and suffix. For instance
      * storage.${backend}.enable=[true|false] can easily be added with this setting. Yet, affix key settings don't support updaters
@@ -2261,8 +2876,9 @@ public class Setting<T> implements ToXContentObject {
     /**
      * Key for the setting
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     public interface Key {
         boolean match(String key);
     }
@@ -2270,8 +2886,9 @@ public class Setting<T> implements ToXContentObject {
     /**
      * A simple key for a setting
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     public static class SimpleKey implements Key {
         protected final String key;
 
@@ -2345,8 +2962,9 @@ public class Setting<T> implements ToXContentObject {
      * A key that allows for static pre and suffix. This is used for settings
      * that have dynamic namespaces like for different accounts etc.
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     public static final class AffixKey implements Key {
         private final Pattern pattern;
         private final String prefix;
@@ -2360,12 +2978,14 @@ public class Setting<T> implements ToXContentObject {
             assert prefix != null || suffix != null : "Either prefix or suffix must be non-null";
 
             this.prefix = prefix;
-            if (prefix.endsWith(".") == false) {
+            if (prefix != null && prefix.endsWith(".") == false) {
                 throw new IllegalArgumentException("prefix must end with a '.'");
             }
             this.suffix = suffix;
             if (suffix == null) {
                 pattern = Pattern.compile("(" + Pattern.quote(prefix) + "((?:[-\\w]+[.])*[-\\w]+$))");
+            } else if (prefix == null) {
+                pattern = Pattern.compile("((?:[-\\w]+[.])*[-\\w]+\\." + Pattern.quote(suffix) + ")");
             } else {
                 // the last part of this regexp is to support both list and group keys
                 pattern = Pattern.compile("(" + Pattern.quote(prefix) + "([-\\w]+)\\." + Pattern.quote(suffix) + ")(?:\\..*)?");

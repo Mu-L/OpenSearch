@@ -33,7 +33,7 @@
 package org.opensearch.script.mustache;
 
 import org.opensearch.client.node.NodeClient;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.rest.BaseRestHandler;
 import org.opensearch.rest.RestRequest;
 import org.opensearch.rest.action.RestToXContentListener;
@@ -81,6 +81,6 @@ public class RestRenderSearchTemplateAction extends BaseRestHandler {
             renderRequest.setScript(id);
         }
 
-        return channel -> client.execute(SearchTemplateAction.INSTANCE, renderRequest, new RestToXContentListener<>(channel));
+        return channel -> client.execute(RenderSearchTemplateAction.INSTANCE, renderRequest, new RestToXContentListener<>(channel));
     }
 }

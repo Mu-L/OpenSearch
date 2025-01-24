@@ -35,11 +35,11 @@ package org.opensearch.cluster.routing.allocation;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.routing.allocation.decider.Decision.Type;
 import org.opensearch.common.Nullable;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.io.stream.Writeable;
-import org.opensearch.common.xcontent.ToXContentFragment;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.xcontent.ToXContentFragment;
+import org.opensearch.core.xcontent.XContentBuilder;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -107,7 +107,7 @@ public abstract class AbstractAllocationDecision implements ToXContentFragment, 
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
-        out.writeOptionalWriteable(targetNode);
+        out.writeOptionalWriteable((stream, node) -> node.writeToWithAttribute(stream), targetNode);
         if (nodeDecisions != null) {
             out.writeBoolean(true);
             out.writeList(nodeDecisions);

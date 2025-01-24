@@ -82,7 +82,8 @@ public class GeoDistanceRangeAggregatorFactory extends ValuesSourceAggregatorFac
                 context,
                 parent,
                 cardinality,
-                metadata) -> {
+                metadata,
+                config) -> {
                 DistanceSource distanceSource = new DistanceSource((ValuesSource.GeoPoint) valuesSource, distanceType, origin, units);
                 return new RangeAggregator(
                     name,
@@ -95,7 +96,8 @@ public class GeoDistanceRangeAggregatorFactory extends ValuesSourceAggregatorFac
                     context,
                     parent,
                     cardinality,
-                    metadata
+                    metadata,
+                    config
                 );
             },
             true
@@ -168,8 +170,14 @@ public class GeoDistanceRangeAggregatorFactory extends ValuesSourceAggregatorFac
                 searchContext,
                 parent,
                 cardinality,
-                metadata
+                metadata,
+                config
             );
+    }
+
+    @Override
+    protected boolean supportsConcurrentSegmentSearch() {
+        return true;
     }
 
     /**
@@ -201,6 +209,11 @@ public class GeoDistanceRangeAggregatorFactory extends ValuesSourceAggregatorFac
         @Override
         public boolean isFloatingPoint() {
             return true;
+        }
+
+        @Override
+        public boolean isBigInteger() {
+            return false;
         }
 
         @Override

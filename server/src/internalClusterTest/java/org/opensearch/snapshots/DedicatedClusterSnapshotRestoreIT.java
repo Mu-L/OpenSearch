@@ -32,11 +32,7 @@
 
 package org.opensearch.snapshots;
 
-import com.carrotsearch.hppc.IntHashSet;
-import com.carrotsearch.hppc.IntSet;
-
 import org.opensearch.Version;
-import org.opensearch.action.ActionFuture;
 import org.opensearch.action.admin.cluster.snapshots.create.CreateSnapshotResponse;
 import org.opensearch.action.admin.cluster.snapshots.get.GetSnapshotsResponse;
 import org.opensearch.action.admin.cluster.snapshots.restore.RestoreSnapshotResponse;
@@ -46,7 +42,7 @@ import org.opensearch.action.admin.cluster.snapshots.status.SnapshotsStatusRespo
 import org.opensearch.action.admin.indices.stats.ShardStats;
 import org.opensearch.action.index.IndexRequestBuilder;
 import org.opensearch.action.support.ActiveShardCount;
-import org.opensearch.action.support.master.AcknowledgedResponse;
+import org.opensearch.action.support.clustermanager.AcknowledgedResponse;
 import org.opensearch.client.Client;
 import org.opensearch.client.node.NodeClient;
 import org.opensearch.cluster.ClusterState;
@@ -57,24 +53,26 @@ import org.opensearch.cluster.metadata.Metadata;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.CheckedFunction;
-import org.opensearch.common.ParseField;
 import org.opensearch.common.Priority;
-import org.opensearch.common.Strings;
-import org.opensearch.common.io.stream.NamedWriteableRegistry;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.Writeable;
+import org.opensearch.common.action.ActionFuture;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.settings.SettingsFilter;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.common.util.concurrent.ThreadContext;
 import org.opensearch.common.util.set.Sets;
-import org.opensearch.common.xcontent.NamedXContentRegistry;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.io.stream.NamedWriteableRegistry;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.index.shard.ShardId;
+import org.opensearch.core.rest.RestStatus;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.env.Environment;
 import org.opensearch.index.seqno.RetentionLeaseActions;
 import org.opensearch.index.seqno.RetentionLeases;
-import org.opensearch.index.shard.ShardId;
 import org.opensearch.indices.recovery.PeerRecoveryTargetService;
 import org.opensearch.indices.recovery.RecoveryState;
 import org.opensearch.node.Node;
@@ -84,13 +82,13 @@ import org.opensearch.repositories.blobstore.BlobStoreRepository;
 import org.opensearch.rest.AbstractRestChannel;
 import org.opensearch.rest.RestRequest;
 import org.opensearch.rest.RestResponse;
-import org.opensearch.rest.RestStatus;
 import org.opensearch.rest.action.admin.cluster.RestClusterStateAction;
 import org.opensearch.rest.action.admin.cluster.RestGetRepositoriesAction;
 import org.opensearch.snapshots.mockstore.MockRepository;
+import org.opensearch.test.InternalTestCluster;
+import org.opensearch.test.OpenSearchIntegTestCase;
 import org.opensearch.test.OpenSearchIntegTestCase.ClusterScope;
 import org.opensearch.test.OpenSearchIntegTestCase.Scope;
-import org.opensearch.test.InternalTestCluster;
 import org.opensearch.test.TestCustomMetadata;
 import org.opensearch.test.disruption.BusyClusterManagerServiceDisruption;
 import org.opensearch.test.disruption.ServiceDisruptionScheme;
@@ -113,8 +111,10 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -573,7 +573,7 @@ public class DedicatedClusterSnapshotRestoreIT extends AbstractSnapshotIntegTest
                 List<SnapshotStatus> snapshotStatuses = snapshotsStatusResponse.getSnapshots();
                 assertEquals(snapshotStatuses.size(), 1);
                 logger.trace("current snapshot status [{}]", snapshotStatuses.get(0));
-                assertTrue(snapshotStatuses.get(0).getState().completed());
+                assertThat(getSnapshot("test-repo", "test-snap-2").state(), equalTo(SnapshotState.PARTIAL));
             }, 1, TimeUnit.MINUTES);
             SnapshotsStatusResponse snapshotsStatusResponse = clusterAdmin().prepareSnapshotStatus("test-repo")
                 .setSnapshots("test-snap-2")
@@ -590,7 +590,6 @@ public class DedicatedClusterSnapshotRestoreIT extends AbstractSnapshotIntegTest
             // After it was marked as completed in the cluster state - we need to check if it's completed on the file system as well
             assertBusy(() -> {
                 SnapshotInfo snapshotInfo = getSnapshot("test-repo", "test-snap-2");
-                assertTrue(snapshotInfo.state().completed());
                 assertEquals(SnapshotState.PARTIAL, snapshotInfo.state());
             }, 1, TimeUnit.MINUTES);
         } else {
@@ -736,7 +735,7 @@ public class DedicatedClusterSnapshotRestoreIT extends AbstractSnapshotIntegTest
 
         ensureGreen("test-idx");
 
-        IntSet reusedShards = new IntHashSet();
+        final Set<Integer> reusedShards = new HashSet<>();
         List<RecoveryState> recoveryStates = client().admin()
             .indices()
             .prepareRecoveries("test-idx")
@@ -761,18 +760,26 @@ public class DedicatedClusterSnapshotRestoreIT extends AbstractSnapshotIntegTest
         internalCluster().startNode(nonClusterManagerNode());
         // Register mock repositories
         for (int i = 0; i < 5; i++) {
-            clusterAdmin().preparePutRepository("test-repo" + i)
-                .setType("mock")
-                .setSettings(Settings.builder().put("location", randomRepoPath()))
-                .setVerify(false)
-                .get();
+            OpenSearchIntegTestCase.putRepositoryRequestBuilder(
+                clusterAdmin(),
+                "test-repo" + i,
+                "mock",
+                false,
+                Settings.builder().put("location", randomRepoPath()),
+                null,
+                false
+            ).get();
         }
         logger.info("--> make sure that properly setup repository can be registered on all nodes");
-        clusterAdmin().preparePutRepository("test-repo-0")
-            .setType("fs")
-            .setSettings(Settings.builder().put("location", randomRepoPath()))
-            .get();
-
+        OpenSearchIntegTestCase.putRepositoryRequestBuilder(
+            clusterAdmin(),
+            "test-repo-0",
+            "fs",
+            true,
+            Settings.builder().put("location", randomRepoPath()),
+            null,
+            false
+        ).get();
     }
 
     public void testThatSensitiveRepositorySettingsAreNotExposed() throws Exception {
@@ -981,11 +988,7 @@ public class DedicatedClusterSnapshotRestoreIT extends AbstractSnapshotIntegTest
         final String snapshotName = "<snapshot-{now/d}>";
 
         logger.info("-->  creating repository");
-        assertAcked(
-            clusterAdmin().preparePutRepository(repo)
-                .setType("fs")
-                .setSettings(Settings.builder().put("location", randomRepoPath()).put("compress", randomBoolean()))
-        );
+        createRepository(repo, "fs", Settings.builder().put("location", randomRepoPath()).put("compress", randomBoolean()));
 
         final String expression1 = nameExpressionResolver.resolveDateMathExpression(snapshotName);
         logger.info("-->  creating date math snapshot");
@@ -1458,6 +1461,13 @@ public class DedicatedClusterSnapshotRestoreIT extends AbstractSnapshotIntegTest
 
         clusterAdmin().prepareRestoreSnapshot("test-repo", "test-snap").get();
         ensureGreen("test-idx");
+
+        // Wait for snapshot process to complete to prevent conflict with repository clean up
+        assertBusy(() -> {
+            SnapshotInfo snapshotInfo = getSnapshot("test-repo", "test-snap-2");
+            assertTrue(snapshotInfo.state().completed());
+            assertEquals(SnapshotState.PARTIAL, snapshotInfo.state());
+        }, 1, TimeUnit.MINUTES);
     }
 
     private long calculateTotalFilesSize(List<Path> files) {

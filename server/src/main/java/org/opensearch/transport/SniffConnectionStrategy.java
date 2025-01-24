@@ -33,9 +33,7 @@
 package org.opensearch.transport;
 
 import org.apache.logging.log4j.message.ParameterizedMessage;
-import org.apache.lucene.util.SetOnce;
 import org.opensearch.Version;
-import org.opensearch.action.ActionListener;
 import org.opensearch.action.StepListener;
 import org.opensearch.action.admin.cluster.state.ClusterStateAction;
 import org.opensearch.action.admin.cluster.state.ClusterStateRequest;
@@ -44,17 +42,20 @@ import org.opensearch.cluster.ClusterName;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.node.DiscoveryNodeRole;
 import org.opensearch.common.Booleans;
-import org.opensearch.common.Strings;
+import org.opensearch.common.SetOnce;
 import org.opensearch.common.UUIDs;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.io.stream.Writeable;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.transport.TransportAddress;
 import org.opensearch.common.util.concurrent.ThreadContext;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.core.internal.io.IOUtils;
+import org.opensearch.common.util.concurrent.ThreadContextAccess;
+import org.opensearch.common.util.io.IOUtils;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.common.transport.TransportAddress;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.threadpool.ThreadPool;
 
 import java.io.IOException;
@@ -349,7 +350,7 @@ public class SniffConnectionStrategy extends RemoteConnectionStrategy {
                 try (ThreadContext.StoredContext ignore = threadContext.stashContext()) {
                     // we stash any context here since this is an internal execution and should not leak any
                     // existing context information.
-                    threadContext.markAsSystemContext();
+                    ThreadContextAccess.doPrivilegedVoid(threadContext::markAsSystemContext);
                     transportService.sendRequest(
                         connection,
                         ClusterStateAction.NAME,
@@ -397,7 +398,7 @@ public class SniffConnectionStrategy extends RemoteConnectionStrategy {
 
         @Override
         public void handleResponse(ClusterStateResponse response) {
-            handleNodes(response.getState().nodes().getNodes().valuesIt());
+            handleNodes(response.getState().nodes().getNodes().values().iterator());
         }
 
         private void handleNodes(Iterator<DiscoveryNode> nodesIter) {

@@ -38,13 +38,15 @@ import org.opensearch.action.support.clustermanager.ClusterManagerNodeReadOperat
 import org.opensearch.client.OpenSearchClient;
 import org.opensearch.cluster.health.ClusterHealthStatus;
 import org.opensearch.common.Priority;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.unit.TimeValue;
 
 /**
  * Builder for requesting cluster health
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class ClusterHealthRequestBuilder extends ClusterManagerNodeReadOperationRequestBuilder<
     ClusterHealthRequest,
     ClusterHealthResponse,
@@ -149,6 +151,29 @@ public class ClusterHealthRequestBuilder extends ClusterManagerNodeReadOperation
 
     public ClusterHealthRequestBuilder setWaitForEvents(Priority waitForEvents) {
         request.waitForEvents(waitForEvents);
+        return this;
+    }
+
+    public ClusterHealthRequestBuilder setAwarenessAttribute(String awarenessAttribute) {
+        request.setAwarenessAttribute(awarenessAttribute);
+        return this;
+    }
+
+    public ClusterHealthRequestBuilder setLevel(String level) {
+        request.setLevel(level);
+        return this;
+    }
+
+    /**
+     * Specifies if the local request should ensure that the local node is commissioned
+     */
+    public final ClusterHealthRequestBuilder setEnsureNodeWeighedIn(boolean ensureNodeCommissioned) {
+        request.ensureNodeWeighedIn(ensureNodeCommissioned);
+        return this;
+    }
+
+    public ClusterHealthRequestBuilder setApplyLevelAtTransportLayer(boolean applyLevelAtTransportLayer) {
+        request.setApplyLevelAtTransportLayer(applyLevelAtTransportLayer);
         return this;
     }
 }

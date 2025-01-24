@@ -35,14 +35,14 @@ package org.opensearch.cluster.routing;
 import org.opensearch.Version;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.common.UUIDs;
-import org.opensearch.index.shard.ShardId;
+import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.repositories.IndexId;
 import org.opensearch.snapshots.Snapshot;
 import org.opensearch.snapshots.SnapshotId;
 import org.opensearch.test.OpenSearchTestCase;
 
-import static org.apache.lucene.tests.util.LuceneTestCase.random;
 import static org.opensearch.test.OpenSearchTestCase.randomAlphaOfLength;
+import static org.apache.lucene.tests.util.LuceneTestCase.random;
 
 /**
  * A helper that allows to create shard routing instances within tests, while not requiring to expose
@@ -205,6 +205,54 @@ public class TestShardRouting {
         );
     }
 
+    public static ShardRouting newShardRoutingRemoteRestore(
+        String index,
+        ShardId shardId,
+        String currentNodeId,
+        String relocatingNodeId,
+        boolean primary,
+        ShardRoutingState state,
+        UnassignedInfo unassignedInfo
+    ) {
+        return new ShardRouting(
+            shardId,
+            currentNodeId,
+            relocatingNodeId,
+            primary,
+            state,
+            new RecoverySource.RemoteStoreRecoverySource(
+                UUIDs.randomBase64UUID(),
+                Version.V_EMPTY,
+                new IndexId(shardId.getIndexName(), shardId.getIndexName())
+            ),
+            unassignedInfo,
+            buildAllocationId(state),
+            -1
+        );
+    }
+
+    public static ShardRouting newShardRouting(
+        ShardId shardId,
+        String currentNodeId,
+        String relocatingNodeId,
+        boolean primary,
+        ShardRoutingState state,
+        RecoverySource recoverySource,
+        UnassignedInfo unassignedInfo
+    ) {
+        return new ShardRouting(
+            shardId,
+            currentNodeId,
+            relocatingNodeId,
+            primary,
+            state,
+            recoverySource,
+            unassignedInfo,
+            buildAllocationId(state),
+            -1
+        );
+    }
+
     public static ShardRouting relocate(ShardRouting shardRouting, String relocatingNodeId, long expectedShardSize) {
         return shardRouting.relocate(relocatingNodeId, expectedShardSize);
     }
@@ -269,6 +317,51 @@ public class TestShardRouting {
                 Version.CURRENT,
                 new IndexId("some_index", UUIDs.randomBase64UUID(random()))
             )
+        );
+    }
+
+    public static ShardRouting newShardRouting(
+        ShardId shardId,
+        String currentNodeId,
+        String relocatingNodeId,
+        boolean primary,
+        boolean searchOnly,
+        ShardRoutingState state,
+        UnassignedInfo unassignedInfo
+    ) {
+        return new ShardRouting(
+            shardId,
+            currentNodeId,
+            relocatingNodeId,
+            primary,
+            searchOnly,
+            state,
+            buildRecoveryTarget(primary, state),
+            unassignedInfo,
+            buildAllocationId(state),
+            -1
+        );
+    }
+
+    public static ShardRouting newShardRouting(
+        ShardId shardId,
+        String currentNodeId,
+        boolean primary,
+        boolean searchOnly,
+        ShardRoutingState state,
+        RecoverySource recoverySource
+    ) {
+        return new ShardRouting(
+            shardId,
+            currentNodeId,
+            null,
+            primary,
+            searchOnly,
+            state,
+            recoverySource,
+            buildUnassignedInfo(state),
+            buildAllocationId(state),
+            -1
         );
     }
 }

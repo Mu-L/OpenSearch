@@ -32,18 +32,19 @@
 
 package org.opensearch.search.aggregations.metrics;
 
+import org.opensearch.index.compositeindex.datacube.MetricStat;
 import org.opensearch.index.query.QueryShardContext;
 import org.opensearch.search.aggregations.Aggregator;
 import org.opensearch.search.aggregations.AggregatorFactories;
 import org.opensearch.search.aggregations.AggregatorFactory;
 import org.opensearch.search.aggregations.CardinalityUpperBound;
 import org.opensearch.search.aggregations.support.CoreValuesSourceType;
-import org.opensearch.search.aggregations.support.ValuesSourceAggregatorFactory;
 import org.opensearch.search.aggregations.support.ValuesSourceConfig;
 import org.opensearch.search.aggregations.support.ValuesSourceRegistry;
 import org.opensearch.search.internal.SearchContext;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -51,12 +52,12 @@ import java.util.Map;
  *
  * @opensearch.internal
  */
-class MinAggregatorFactory extends ValuesSourceAggregatorFactory {
+class MinAggregatorFactory extends MetricAggregatorFactory {
 
     static void registerAggregators(ValuesSourceRegistry.Builder builder) {
         builder.register(
             MinAggregationBuilder.REGISTRY_KEY,
-            org.opensearch.common.collect.List.of(CoreValuesSourceType.NUMERIC, CoreValuesSourceType.DATE, CoreValuesSourceType.BOOLEAN),
+            List.of(CoreValuesSourceType.NUMERIC, CoreValuesSourceType.DATE, CoreValuesSourceType.BOOLEAN),
             MinAggregator::new,
             true
         );
@@ -74,6 +75,11 @@ class MinAggregatorFactory extends ValuesSourceAggregatorFactory {
     }
 
     @Override
+    public MetricStat getMetricStat() {
+        return MetricStat.MIN;
+    }
+
+    @Override
     protected Aggregator createUnmapped(SearchContext searchContext, Aggregator parent, Map<String, Object> metadata) throws IOException {
         return new MinAggregator(name, config, searchContext, parent, metadata);
     }
@@ -88,5 +94,10 @@ class MinAggregatorFactory extends ValuesSourceAggregatorFactory {
         return queryShardContext.getValuesSourceRegistry()
             .getAggregator(MinAggregationBuilder.REGISTRY_KEY, config)
             .build(name, config, searchContext, parent, metadata);
+    }
+
+    @Override
+    protected boolean supportsConcurrentSegmentSearch() {
+        return true;
     }
 }

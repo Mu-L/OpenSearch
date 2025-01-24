@@ -33,19 +33,27 @@
 package org.opensearch.ingest;
 
 import org.opensearch.OpenSearchException;
+import org.opensearch.common.metrics.OperationStats;
 import org.opensearch.test.OpenSearchTestCase;
 import org.junit.Before;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 
 import static java.util.Collections.singletonList;
+import static org.opensearch.ingest.IngestDocumentPreparer.SHOULD_FAIL_KEY;
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
@@ -75,9 +83,9 @@ public class CompoundProcessorTests extends OpenSearchTestCase {
     public void testSingleProcessor() throws Exception {
         LongSupplier relativeTimeProvider = mock(LongSupplier.class);
         when(relativeTimeProvider.getAsLong()).thenReturn(0L, TimeUnit.MILLISECONDS.toNanos(1));
-        TestProcessor processor = new TestProcessor(
-            ingestDocument -> { assertStats(0, ingestDocument.getFieldValue("compoundProcessor", CompoundProcessor.class), 1, 0, 0, 0); }
-        );
+        TestProcessor processor = new TestProcessor(ingestDocument -> {
+            assertStats(0, ingestDocument.getFieldValue("compoundProcessor", CompoundProcessor.class), 1, 0, 0, 0);
+        });
         CompoundProcessor compoundProcessor = new CompoundProcessor(relativeTimeProvider, processor);
         ingestDocument.setFieldValue("compoundProcessor", compoundProcessor); // ugly hack to assert current count = 1
         assertThat(compoundProcessor.getProcessors().size(), equalTo(1));
@@ -428,15 +436,220 @@ public class CompoundProcessorTests extends OpenSearchTestCase {
         assertThat(ingestProcessorException.getHeader("pipeline_origin"), equalTo(Arrays.asList("2", "1")));
     }
 
+    public void testBatchExecute_happyCase() {
+        List<IngestDocumentWrapper> wrapperList = Arrays.asList(
+            IngestDocumentPreparer.createIngestDocumentWrapper(1),
+            IngestDocumentPreparer.createIngestDocumentWrapper(2),
+            IngestDocumentPreparer.createIngestDocumentWrapper(3)
+        );
+        TestProcessor firstProcessor = new TestProcessor(doc -> {});
+        TestProcessor secondProcessor = new TestProcessor(doc -> {});
+        LongSupplier relativeTimeProvider = mock(LongSupplier.class);
+        CompoundProcessor compoundProcessor = new CompoundProcessor(
+            false,
+            Arrays.asList(firstProcessor, secondProcessor),
+            null,
+            relativeTimeProvider
+        );
+
+        compoundProcessor.batchExecute(wrapperList, results -> {
+            assertEquals(firstProcessor.getInvokedCounter(), wrapperList.size());
+            assertEquals(secondProcessor.getInvokedCounter(), wrapperList.size());
+            assertEquals(results.size(), wrapperList.size());
+            OperationStats stats = compoundProcessor.getProcessorsWithMetrics().get(0).v2().createStats();
+            assertEquals(0, stats.getCurrent());
+            assertEquals(3, stats.getCount());
+            for (int i = 0; i < wrapperList.size(); ++i) {
+                assertEquals(wrapperList.get(i).getSlot(), results.get(i).getSlot());
+                assertEquals(wrapperList.get(i).getIngestDocument(), results.get(i).getIngestDocument());
+                assertEquals(wrapperList.get(i).getException(), results.get(i).getException());
+            }
+        });
+    }
+
+    public void testBatchExecute_documentToDrop() {
+        List<IngestDocumentWrapper> wrapperList = Arrays.asList(
+            IngestDocumentPreparer.createIngestDocumentWrapper(1),
+            IngestDocumentPreparer.createIngestDocumentWrapper(2, true),
+            IngestDocumentPreparer.createIngestDocumentWrapper(3)
+        );
+        TestProcessor firstProcessor = new TestProcessor("", "", "", doc -> {
+            if (doc.hasField(SHOULD_FAIL_KEY) && doc.getFieldValue(SHOULD_FAIL_KEY, Boolean.class)) {
+                return null;
+            }
+            return doc;
+        });
+        TestProcessor secondProcessor = new TestProcessor(doc -> {});
+        LongSupplier relativeTimeProvider = mock(LongSupplier.class);
+        CompoundProcessor compoundProcessor = new CompoundProcessor(
+            false,
+            Arrays.asList(firstProcessor, secondProcessor),
+            null,
+            relativeTimeProvider
+        );
+
+        AtomicInteger callCounter = new AtomicInteger();
+        List<IngestDocumentWrapper> totalResults = Collections.synchronizedList(new ArrayList<>());
+        compoundProcessor.batchExecute(wrapperList, results -> {
+            totalResults.addAll(results);
+            if (callCounter.addAndGet(results.size()) == 3) {
+                assertEquals(firstProcessor.getInvokedCounter(), wrapperList.size());
+                assertEquals(secondProcessor.getInvokedCounter(), wrapperList.size() - 1);
+                assertEquals(totalResults.size(), wrapperList.size());
+                OperationStats stats = compoundProcessor.getProcessorsWithMetrics().get(0).v2().createStats();
+                assertEquals(0, stats.getCurrent());
+                assertEquals(3, stats.getCount());
+                totalResults.sort(Comparator.comparingInt(IngestDocumentWrapper::getSlot));
+                for (int i = 0; i < wrapperList.size(); ++i) {
+                    assertEquals(wrapperList.get(i).getSlot(), totalResults.get(i).getSlot());
+                    if (2 == wrapperList.get(i).getSlot()) {
+                        assertNull(totalResults.get(i).getIngestDocument());
+                    } else {
+                        assertEquals(wrapperList.get(i).getIngestDocument(), totalResults.get(i).getIngestDocument());
+                    }
+                    assertEquals(wrapperList.get(i).getException(), totalResults.get(i).getException());
+                }
+            }
+        });
+    }
+
+    public void testBatchExecute_ignoreFailure() {
+        List<IngestDocumentWrapper> wrapperList = Arrays.asList(
+            IngestDocumentPreparer.createIngestDocumentWrapper(1),
+            IngestDocumentPreparer.createIngestDocumentWrapper(2, true),
+            IngestDocumentPreparer.createIngestDocumentWrapper(3, true)
+        );
+        TestProcessor firstProcessor = new TestProcessor(doc -> {
+            if (doc.hasField(SHOULD_FAIL_KEY) && doc.getFieldValue(SHOULD_FAIL_KEY, Boolean.class)) {
+                throw new RuntimeException("fail");
+            }
+        });
+        TestProcessor secondProcessor = new TestProcessor(doc -> {});
+        TestProcessor onFailureProcessor = new TestProcessor("id2", "on_failure", null, doc -> {});
+        LongSupplier relativeTimeProvider = mock(LongSupplier.class);
+        CompoundProcessor compoundProcessor = new CompoundProcessor(
+            true,
+            Arrays.asList(firstProcessor, secondProcessor),
+            singletonList(onFailureProcessor),
+            relativeTimeProvider
+        );
+
+        compoundProcessor.batchExecute(wrapperList, results -> {
+            assertEquals(firstProcessor.getInvokedCounter(), wrapperList.size());
+            assertEquals(secondProcessor.getInvokedCounter(), wrapperList.size());
+            assertEquals(0, onFailureProcessor.getInvokedCounter());
+            assertEquals(results.size(), wrapperList.size());
+            OperationStats stats = compoundProcessor.getProcessorsWithMetrics().get(0).v2().createStats();
+            assertEquals(0, stats.getCurrent());
+            assertEquals(3, stats.getCount());
+            for (int i = 0; i < wrapperList.size(); ++i) {
+                assertEquals(wrapperList.get(i).getSlot(), results.get(i).getSlot());
+                assertEquals(wrapperList.get(i).getIngestDocument(), results.get(i).getIngestDocument());
+                assertEquals(wrapperList.get(i).getException(), results.get(i).getException());
+            }
+        });
+    }
+
+    public void testBatchExecute_exception_no_onFailureProcessor() {
+        Set<Integer> failureSlot = new HashSet<>(Arrays.asList(2, 3));
+        List<IngestDocumentWrapper> wrapperList = Arrays.asList(
+            IngestDocumentPreparer.createIngestDocumentWrapper(1),
+            IngestDocumentPreparer.createIngestDocumentWrapper(2, true),
+            IngestDocumentPreparer.createIngestDocumentWrapper(3, true)
+        );
+        TestProcessor firstProcessor = new TestProcessor(doc -> {
+            if (doc.hasField(SHOULD_FAIL_KEY) && doc.getFieldValue(SHOULD_FAIL_KEY, Boolean.class)) {
+                throw new RuntimeException("fail");
+            }
+        });
+        TestProcessor secondProcessor = new TestProcessor(doc -> {});
+        LongSupplier relativeTimeProvider = mock(LongSupplier.class);
+        CompoundProcessor compoundProcessor = new CompoundProcessor(
+            false,
+            Arrays.asList(firstProcessor, secondProcessor),
+            Collections.emptyList(),
+            relativeTimeProvider
+        );
+
+        AtomicInteger callCounter = new AtomicInteger();
+        List<IngestDocumentWrapper> totalResults = Collections.synchronizedList(new ArrayList<>());
+        compoundProcessor.batchExecute(wrapperList, results -> {
+            totalResults.addAll(results);
+            if (callCounter.incrementAndGet() == 3) {
+                assertEquals(wrapperList.size(), firstProcessor.getInvokedCounter());
+                assertEquals(1, secondProcessor.getInvokedCounter());
+                assertEquals(totalResults.size(), wrapperList.size());
+                OperationStats stats = compoundProcessor.getProcessorsWithMetrics().get(0).v2().createStats();
+                assertEquals(0, stats.getCurrent());
+                assertEquals(3, stats.getCount());
+                assertEquals(2, stats.getFailedCount());
+                totalResults.sort(Comparator.comparingInt(IngestDocumentWrapper::getSlot));
+                for (int i = 0; i < wrapperList.size(); ++i) {
+                    assertEquals(wrapperList.get(i).getSlot(), totalResults.get(i).getSlot());
+                    if (failureSlot.contains(wrapperList.get(i).getSlot())) {
+                        assertNotNull(totalResults.get(i).getException());
+                    } else {
+                        assertEquals(wrapperList.get(i).getIngestDocument(), totalResults.get(i).getIngestDocument());
+                        assertEquals(wrapperList.get(i).getException(), totalResults.get(i).getException());
+                    }
+                }
+            }
+        });
+    }
+
+    public void testBatchExecute_exception_with_onFailureProcessor() {
+        List<IngestDocumentWrapper> wrapperList = Arrays.asList(
+            IngestDocumentPreparer.createIngestDocumentWrapper(1),
+            IngestDocumentPreparer.createIngestDocumentWrapper(2, true),
+            IngestDocumentPreparer.createIngestDocumentWrapper(3, true)
+        );
+        TestProcessor firstProcessor = new TestProcessor(doc -> {
+            if (doc.hasField(SHOULD_FAIL_KEY) && doc.getFieldValue(SHOULD_FAIL_KEY, Boolean.class)) {
+                throw new RuntimeException("fail");
+            }
+        });
+        TestProcessor secondProcessor = new TestProcessor(doc -> {});
+        TestProcessor onFailureProcessor = new TestProcessor("id2", "on_failure", null, doc -> {});
+        LongSupplier relativeTimeProvider = mock(LongSupplier.class);
+        CompoundProcessor compoundProcessor = new CompoundProcessor(
+            false,
+            Arrays.asList(firstProcessor, secondProcessor),
+            singletonList(onFailureProcessor),
+            relativeTimeProvider
+        );
+
+        AtomicInteger callCounter = new AtomicInteger();
+        List<IngestDocumentWrapper> totalResults = Collections.synchronizedList(new ArrayList<>());
+        compoundProcessor.batchExecute(wrapperList, results -> {
+            totalResults.addAll(results);
+            if (callCounter.incrementAndGet() == 3) {
+                assertEquals(wrapperList.size(), firstProcessor.getInvokedCounter());
+                assertEquals(1, secondProcessor.getInvokedCounter());
+                assertEquals(2, onFailureProcessor.getInvokedCounter());
+                assertEquals(totalResults.size(), wrapperList.size());
+                OperationStats stats = compoundProcessor.getProcessorsWithMetrics().get(0).v2().createStats();
+                assertEquals(0, stats.getCurrent());
+                assertEquals(3, stats.getCount());
+                assertEquals(2, stats.getFailedCount());
+                totalResults.sort(Comparator.comparingInt(IngestDocumentWrapper::getSlot));
+                for (int i = 0; i < wrapperList.size(); ++i) {
+                    assertEquals(wrapperList.get(i).getSlot(), totalResults.get(i).getSlot());
+                    assertEquals(wrapperList.get(i).getIngestDocument(), totalResults.get(i).getIngestDocument());
+                    assertNull(totalResults.get(i).getException());
+                }
+            }
+        });
+    }
+
     private void assertStats(CompoundProcessor compoundProcessor, long count, long failed, long time) {
         assertStats(0, compoundProcessor, 0L, count, failed, time);
     }
 
     private void assertStats(int processor, CompoundProcessor compoundProcessor, long current, long count, long failed, long time) {
-        IngestStats.Stats stats = compoundProcessor.getProcessorsWithMetrics().get(processor).v2().createStats();
-        assertThat(stats.getIngestCount(), equalTo(count));
-        assertThat(stats.getIngestCurrent(), equalTo(current));
-        assertThat(stats.getIngestFailedCount(), equalTo(failed));
-        assertThat(stats.getIngestTimeInMillis(), equalTo(time));
+        OperationStats stats = compoundProcessor.getProcessorsWithMetrics().get(processor).v2().createStats();
+        assertThat(stats.getCount(), equalTo(count));
+        assertThat(stats.getCurrent(), equalTo(current));
+        assertThat(stats.getFailedCount(), equalTo(failed));
+        assertThat(stats.getTotalTimeInMillis(), equalTo(time));
     }
 }

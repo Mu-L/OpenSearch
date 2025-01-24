@@ -40,12 +40,17 @@ import org.opensearch.OpenSearchParseException;
 import org.opensearch.action.support.clustermanager.ClusterManagerNodeRequest;
 import org.opensearch.client.node.NodeClient;
 import org.opensearch.common.CheckedConsumer;
+import org.opensearch.common.annotation.ExperimentalApi;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.collect.Tuple;
 import org.opensearch.common.logging.DeprecationLogger;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Setting.Property;
+import org.opensearch.core.rest.RestStatus;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.plugins.ActionPlugin;
 import org.opensearch.rest.action.admin.cluster.RestNodesUsageAction;
+import org.opensearch.tasks.Task;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -70,6 +75,7 @@ import java.util.stream.Collectors;
  *
  * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public abstract class BaseRestHandler implements RestHandler {
 
     public static final Setting<Boolean> MULTI_ALLOW_EXPLICIT_INDEX = Setting.boolSetting(
@@ -117,16 +123,12 @@ public abstract class BaseRestHandler implements RestHandler {
             throw new IllegalArgumentException(unrecognized(request, unconsumedParams, candidateParams, "parameter"));
         }
 
-        if (request.hasContent() && request.isContentConsumed() == false) {
-            throw new IllegalArgumentException("request [" + request.method() + " " + request.path() + "] does not support having a body");
-        }
-
         usageCount.increment();
         // execute the action
         action.accept(channel);
     }
 
-    protected final String unrecognized(
+    public static String unrecognizedStrings(
         final RestRequest request,
         final Set<String> invalids,
         final Set<String> candidates,
@@ -172,11 +174,42 @@ public abstract class BaseRestHandler implements RestHandler {
     }
 
     /**
+     * Returns a String message of the detail of any unrecognized error occurred. The string is intended for use in error messages to be returned to the user.
+     *
+     * @param request The request that caused the exception
+     * @param invalids Strings from the request which were unable to be understood.
+     * @param candidates A set of words that are most likely to be the valid strings determined invalid, to be suggested to the user.
+     * @param detail The parameter contains the details of the exception.
+     * @return a String that contains the message.
+     */
+    protected final String unrecognized(
+        final RestRequest request,
+        final Set<String> invalids,
+        final Set<String> candidates,
+        final String detail
+    ) {
+        return unrecognizedStrings(request, invalids, candidates, detail);
+    }
+
+    /**
      * REST requests are handled by preparing a channel consumer that represents the execution of
      * the request against a channel.
+     *
+     * @opensearch.api
      */
     @FunctionalInterface
+    @PublicApi(since = "1.0.0")
     protected interface RestChannelConsumer extends CheckedConsumer<RestChannel, Exception> {}
+
+    /**
+     * Streaming REST requests are handled by preparing a streaming channel consumer that represents the execution of
+     * the request against a channel.
+     *
+     * @opensearch.experimental
+     */
+    @FunctionalInterface
+    @ExperimentalApi
+    protected interface StreamingRestChannelConsumer extends CheckedConsumer<StreamingRestChannel, Exception> {}
 
     /**
      * Prepare the request for execution. Implementations should consume all request params before
@@ -295,5 +328,24 @@ public abstract class BaseRestHandler implements RestHandler {
         public boolean allowSystemIndexAccessByDefault() {
             return delegate.allowSystemIndexAccessByDefault();
         }
+
+        @Override
+        public boolean supportsStreaming() {
+            return delegate.supportsStreaming();
+        }
+    }
+
+    /**
+     * Return a task immediately when executing some long-running operations asynchronously, like reindex, resize, open, force merge
+     */
+    public RestChannelConsumer sendTask(String nodeId, Task task) {
+        return channel -> {
+            try (XContentBuilder builder = channel.newBuilder()) {
+                builder.startObject();
+                builder.field("task", nodeId + ":" + task.getId());
+                builder.endObject();
+                channel.sendResponse(new BytesRestResponse(RestStatus.OK, builder));
+            }
+        };
     }
 }

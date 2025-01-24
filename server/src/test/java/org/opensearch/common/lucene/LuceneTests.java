@@ -31,25 +31,28 @@
 
 package org.opensearch.common.lucene;
 
-import org.apache.lucene.tests.analysis.MockAnalyzer;
 import org.apache.lucene.analysis.core.KeywordAnalyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.Field.Store;
 import org.apache.lucene.document.LatLonDocValuesField;
+import org.apache.lucene.document.LatLonPoint;
 import org.apache.lucene.document.NumericDocValuesField;
 import org.apache.lucene.document.StringField;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.DirectoryReader;
+import org.apache.lucene.index.IndexCommit;
+import org.apache.lucene.index.IndexFormatTooOldException;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.NoDeletionPolicy;
 import org.apache.lucene.index.NoMergePolicy;
-import org.apache.lucene.tests.index.RandomIndexWriter;
 import org.apache.lucene.index.SegmentInfos;
 import org.apache.lucene.index.SoftDeletesRetentionMergePolicy;
+import org.apache.lucene.index.StandardDirectoryReader;
+import org.apache.lucene.index.StoredFields;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.search.Explanation;
 import org.apache.lucene.search.IndexOrDocValuesQuery;
@@ -69,17 +72,22 @@ import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.search.Weight;
 import org.apache.lucene.store.Directory;
-import org.apache.lucene.store.MMapDirectory;
+import org.apache.lucene.tests.analysis.MockAnalyzer;
+import org.apache.lucene.tests.index.RandomIndexWriter;
 import org.apache.lucene.tests.store.MockDirectoryWrapper;
+import org.apache.lucene.tests.util.TestUtil;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.BytesRef;
+import org.opensearch.LegacyESVersion;
+import org.opensearch.Version;
 import org.opensearch.common.collect.Tuple;
-import org.opensearch.common.io.stream.NamedWriteableRegistry;
-import org.opensearch.core.internal.io.IOUtils;
+import org.opensearch.common.util.io.IOUtils;
+import org.opensearch.core.common.io.stream.NamedWriteableRegistry;
 import org.opensearch.index.fielddata.IndexFieldData;
 import org.opensearch.index.fielddata.fieldcomparator.BytesRefFieldComparatorSource;
 import org.opensearch.index.fielddata.fieldcomparator.DoubleValuesComparatorSource;
 import org.opensearch.index.fielddata.fieldcomparator.FloatValuesComparatorSource;
+import org.opensearch.index.fielddata.fieldcomparator.IntValuesComparatorSource;
 import org.opensearch.index.fielddata.fieldcomparator.LongValuesComparatorSource;
 import org.opensearch.search.MultiValueMode;
 import org.opensearch.test.OpenSearchTestCase;
@@ -87,6 +95,7 @@ import org.opensearch.test.VersionUtils;
 
 import java.io.IOException;
 import java.io.StringReader;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -97,6 +106,8 @@ import static org.hamcrest.Matchers.equalTo;
 
 public class LuceneTests extends OpenSearchTestCase {
     private static final NamedWriteableRegistry EMPTY_REGISTRY = new NamedWriteableRegistry(Collections.emptyList());
+
+    public static final String OLDER_VERSION_INDEX_ZIP_RELATIVE_PATH = "/indices/bwc/os-1.3.0/testIndex-os-1.3.0.zip";
 
     public void testCleanIndex() throws IOException {
         MockDirectoryWrapper dir = newMockDirectory();
@@ -194,10 +205,10 @@ public class LuceneTests extends OpenSearchTestCase {
         assertEquals(3, open.maxDoc());
 
         IndexSearcher s = new IndexSearcher(open);
-        assertEquals(s.search(new TermQuery(new Term("id", "1")), 1).totalHits.value, 1);
-        assertEquals(s.search(new TermQuery(new Term("id", "2")), 1).totalHits.value, 1);
-        assertEquals(s.search(new TermQuery(new Term("id", "3")), 1).totalHits.value, 1);
-        assertEquals(s.search(new TermQuery(new Term("id", "4")), 1).totalHits.value, 0);
+        assertEquals(s.search(new TermQuery(new Term("id", "1")), 1).totalHits.value(), 1);
+        assertEquals(s.search(new TermQuery(new Term("id", "2")), 1).totalHits.value(), 1);
+        assertEquals(s.search(new TermQuery(new Term("id", "3")), 1).totalHits.value(), 1);
+        assertEquals(s.search(new TermQuery(new Term("id", "4")), 1).totalHits.value(), 0);
 
         for (String file : dir.listAll()) {
             assertFalse("unexpected file: " + file, file.equals("segments_3") || file.startsWith("_2"));
@@ -318,6 +329,36 @@ public class LuceneTests extends OpenSearchTestCase {
         dir.close();
     }
 
+    /**
+     * Tests whether old segments are readable and queryable based on the data documented
+     * in the README <a href="file:../../../../../resources/indices/bwc/os-1.3.0/README.md">here</a>.
+     */
+    public void testReadSegmentInfosExtendedCompatibility() throws IOException {
+        final Version minVersion = LegacyESVersion.V_7_2_0;
+        Path tmp = createTempDir();
+        TestUtil.unzip(getClass().getResourceAsStream(OLDER_VERSION_INDEX_ZIP_RELATIVE_PATH), tmp);
+        try (MockDirectoryWrapper dir = newMockFSDirectory(tmp)) {
+            // The standard API will throw an exception
+            expectThrows(IndexFormatTooOldException.class, () -> Lucene.readSegmentInfos(dir));
+            SegmentInfos si = Lucene.readSegmentInfos(dir, minVersion);
+            assertEquals(1, Lucene.getNumDocs(si));
+            IndexCommit indexCommit = Lucene.getIndexCommit(si, dir);
+            // uses the "expert" Lucene API
+            try (
+                StandardDirectoryReader reader = (StandardDirectoryReader) DirectoryReader.open(
+                    indexCommit,
+                    minVersion.minimumIndexCompatibilityVersion().luceneVersion.major,
+                    null
+                )
+            ) {
+                IndexSearcher searcher = newSearcher(reader);
+                // radius too small, should get no results
+                assertFalse(Lucene.exists(searcher, LatLonPoint.newDistanceQuery("testLocation", 48.57532, -112.87695, 2)));
+                assertTrue(Lucene.exists(searcher, LatLonPoint.newDistanceQuery("testLocation", 48.57532, -112.87695, 20000)));
+            }
+        }
+    }
+
     public void testCount() throws Exception {
         Directory dir = newDirectory();
         RandomIndexWriter w = new RandomIndexWriter(random(), dir);
@@ -426,11 +467,6 @@ public class LuceneTests extends OpenSearchTestCase {
                 }
 
                 @Override
-                public Scorer scorer(LeafReaderContext context) throws IOException {
-                    throw new UnsupportedOperationException();
-                }
-
-                @Override
                 public ScorerSupplier scorerSupplier(LeafReaderContext context) throws IOException {
                     return new ScorerSupplier() {
 
@@ -485,18 +521,6 @@ public class LuceneTests extends OpenSearchTestCase {
         }
     }
 
-    /**
-     * Test that the "unmap hack" is detected as supported by lucene.
-     * This works around the following bug: https://bugs.openjdk.java.net/browse/JDK-4724038
-     * <p>
-     * While not guaranteed, current status is "Critical Internal API": http://openjdk.java.net/jeps/260
-     * Additionally this checks we did not screw up the security logic around the hack.
-     */
-    public void testMMapHackSupported() throws Exception {
-        // add assume's here if needed for certain platforms, but we should know if it does not work.
-        assertTrue("MMapDirectory does not support unmapping: " + MMapDirectory.UNMAP_NOT_SUPPORTED_REASON, MMapDirectory.UNMAP_SUPPORTED);
-    }
-
     public void testWrapAllDocsLive() throws Exception {
         Directory dir = newDirectory();
         IndexWriterConfig config = newIndexWriterConfig().setSoftDeletesField(Lucene.SOFT_DELETES_FIELD)
@@ -525,12 +549,13 @@ public class LuceneTests extends OpenSearchTestCase {
         }
         try (DirectoryReader unwrapped = DirectoryReader.open(writer)) {
             DirectoryReader reader = Lucene.wrapAllDocsLive(unwrapped);
+            StoredFields storedFields = reader.storedFields();
             assertThat(reader.numDocs(), equalTo(liveDocs.size()));
             IndexSearcher searcher = new IndexSearcher(reader);
             Set<String> actualDocs = new HashSet<>();
             TopDocs topDocs = searcher.search(new MatchAllDocsQuery(), Integer.MAX_VALUE);
             for (ScoreDoc scoreDoc : topDocs.scoreDocs) {
-                actualDocs.add(reader.document(scoreDoc.doc).get("id"));
+                actualDocs.add(storedFields.document(scoreDoc.doc).get("id"));
             }
             assertThat(actualDocs, equalTo(liveDocs));
         }
@@ -569,13 +594,14 @@ public class LuceneTests extends OpenSearchTestCase {
         }
         try (DirectoryReader unwrapped = DirectoryReader.open(writer)) {
             DirectoryReader reader = Lucene.wrapAllDocsLive(unwrapped);
+            StoredFields storedFields = reader.storedFields();
             assertThat(reader.maxDoc(), equalTo(numDocs + abortedDocs));
             assertThat(reader.numDocs(), equalTo(liveDocs.size()));
             IndexSearcher searcher = new IndexSearcher(reader);
             List<String> actualDocs = new ArrayList<>();
             TopDocs topDocs = searcher.search(new MatchAllDocsQuery(), Integer.MAX_VALUE);
             for (ScoreDoc scoreDoc : topDocs.scoreDocs) {
-                actualDocs.add(reader.document(scoreDoc.doc).get("id"));
+                actualDocs.add(storedFields.document(scoreDoc.doc).get("id"));
             }
             assertThat(actualDocs, equalTo(liveDocs));
         }
@@ -661,7 +687,7 @@ public class LuceneTests extends OpenSearchTestCase {
         IndexFieldData.XFieldComparatorSource comparatorSource;
         boolean reverse = randomBoolean();
         Object missingValue = null;
-        switch (randomIntBetween(0, 3)) {
+        switch (randomIntBetween(0, 4)) {
             case 0:
                 comparatorSource = new LongValuesComparatorSource(
                     null,
@@ -690,6 +716,15 @@ public class LuceneTests extends OpenSearchTestCase {
                 comparatorSource = new BytesRefFieldComparatorSource(
                     null,
                     randomBoolean() ? "_first" : "_last",
+                    randomFrom(MultiValueMode.values()),
+                    null
+                );
+                missingValue = comparatorSource.missingValue(reverse);
+                break;
+            case 4:
+                comparatorSource = new IntValuesComparatorSource(
+                    null,
+                    randomBoolean() ? randomInt() : null,
                     randomFrom(MultiValueMode.values()),
                     null
                 );

@@ -35,11 +35,13 @@ package org.opensearch.index.query;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.search.BoostQuery;
 import org.apache.lucene.search.DisjunctionMaxQuery;
+import org.apache.lucene.search.MultiTermQuery;
 import org.apache.lucene.search.PrefixQuery;
 import org.apache.lucene.search.Query;
 import org.opensearch.test.AbstractQueryTestCase;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -103,7 +105,10 @@ public class DisMaxQueryBuilderTests extends AbstractQueryTestCase<DisMaxQueryBu
             + "    }\n"
             + "}";
         Query query = parseQuery(queryAsString).toQuery(createShardContext());
-        Query expected = new DisjunctionMaxQuery(List.of(new BoostQuery(new PrefixQuery(new Term(TEXT_FIELD_NAME, "sh")), 1.2f)), 0);
+        Query expected = new DisjunctionMaxQuery(
+            List.of(new BoostQuery(new PrefixQuery(new Term(TEXT_FIELD_NAME, "sh"), MultiTermQuery.CONSTANT_SCORE_BLENDED_REWRITE), 1.2f)),
+            0
+        );
         assertEquals(expected, query);
     }
 
@@ -151,5 +156,15 @@ public class DisMaxQueryBuilderTests extends AbstractQueryTestCase<DisMaxQueryBu
         QueryBuilder rewrittenAgain = rewritten.rewrite(createShardContext());
         assertEquals(rewrittenAgain, expected);
         assertEquals(Rewriteable.rewrite(dismax, createShardContext()), expected);
+    }
+
+    public void testVisit() {
+        DisMaxQueryBuilder dismax = new DisMaxQueryBuilder();
+        dismax.add(new WrapperQueryBuilder(new WrapperQueryBuilder(new MatchAllQueryBuilder().toString()).toString()));
+
+        List<QueryBuilder> visitedQueries = new ArrayList<>();
+        dismax.visit(createTestVisitor(visitedQueries));
+
+        assertEquals(2, visitedQueries.size());
     }
 }

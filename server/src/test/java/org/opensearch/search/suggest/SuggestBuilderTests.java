@@ -32,20 +32,20 @@
 
 package org.opensearch.search.suggest;
 
-import org.opensearch.common.io.stream.NamedWriteableRegistry;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.xcontent.NamedXContentRegistry;
-import org.opensearch.common.xcontent.ToXContent;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentFactory;
-import org.opensearch.common.xcontent.XContentParser;
 import org.opensearch.common.xcontent.XContentType;
+import org.opensearch.core.common.io.stream.NamedWriteableRegistry;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
+import org.opensearch.core.xcontent.ToXContent;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.search.SearchModule;
 import org.opensearch.search.suggest.completion.CompletionSuggesterBuilderTests;
 import org.opensearch.search.suggest.phrase.PhraseSuggestionBuilderTests;
 import org.opensearch.search.suggest.term.TermSuggestionBuilderTests;
-import org.opensearch.test.OpenSearchTestCase;
 import org.opensearch.test.EqualsHashCodeTestUtils;
+import org.opensearch.test.OpenSearchTestCase;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 
@@ -82,7 +82,7 @@ public class SuggestBuilderTests extends OpenSearchTestCase {
     public void testFromXContent() throws IOException {
         for (int runs = 0; runs < NUMBER_OF_RUNS; runs++) {
             SuggestBuilder suggestBuilder = randomSuggestBuilder();
-            XContentBuilder xContentBuilder = XContentFactory.contentBuilder(randomFrom(XContentType.values()));
+            XContentBuilder xContentBuilder = MediaTypeRegistry.contentBuilder(randomFrom(XContentType.values()));
             if (randomBoolean()) {
                 xContentBuilder.prettyPrint();
             }
@@ -102,11 +102,9 @@ public class SuggestBuilderTests extends OpenSearchTestCase {
     public void testEqualsAndHashcode() throws IOException {
         for (int runs = 0; runs < NUMBER_OF_RUNS; runs++) {
             // explicit about type parameters, see: https://bugs.eclipse.org/bugs/show_bug.cgi?id=481649
-            EqualsHashCodeTestUtils.<SuggestBuilder>checkEqualsAndHashCode(
-                randomSuggestBuilder(),
-                original -> { return copyWriteable(original, namedWriteableRegistry, SuggestBuilder::new); },
-                this::createMutation
-            );
+            EqualsHashCodeTestUtils.<SuggestBuilder>checkEqualsAndHashCode(randomSuggestBuilder(), original -> {
+                return copyWriteable(original, namedWriteableRegistry, SuggestBuilder::new);
+            }, this::createMutation);
         }
     }
 

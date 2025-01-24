@@ -33,7 +33,7 @@
 package org.opensearch.client.indices;
 
 import org.opensearch.action.admin.indices.alias.Alias;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.test.AbstractXContentTestCase;
 
 import java.io.IOException;
@@ -69,8 +69,8 @@ public class CreateIndexRequestTests extends AbstractXContentTestCase<CreateInde
         } else {
             assertNotNull(actual.mappings());
             try (
-                XContentParser expectedJson = createParser(expected.mappingsXContentType().xContent(), expected.mappings());
-                XContentParser actualJson = createParser(actual.mappingsXContentType().xContent(), actual.mappings())
+                XContentParser expectedJson = createParser(expected.mappingsMediaType().xContent(), expected.mappings());
+                XContentParser actualJson = createParser(actual.mappingsMediaType().xContent(), actual.mappings())
             ) {
                 assertEquals(expectedJson.map(), actualJson.map());
             } catch (IOException e) {

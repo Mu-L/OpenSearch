@@ -32,11 +32,11 @@
 
 package org.opensearch.repositories;
 
-import org.opensearch.common.UUIDs;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.test.OpenSearchTestCase;
 
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.hamcrest.Matchers.equalTo;
@@ -60,19 +60,14 @@ public class RepositoriesStatsArchiveTests extends OpenSearchTestCase {
         fakeRelativeClock.set(retentionTimeInMillis * 2);
         int statsToBeRetainedCount = randomInt(10);
         for (int i = 0; i < statsToBeRetainedCount; i++) {
-            RepositoryStatsSnapshot repoStats = createRepositoryStats(
-                new RepositoryStats(org.opensearch.common.collect.Map.of("GET", 10L))
-            );
+            RepositoryStatsSnapshot repoStats = createRepositoryStats(new RepositoryStats(Map.of("GET", 10L)));
             repositoriesStatsArchive.archive(repoStats);
         }
 
         List<RepositoryStatsSnapshot> archivedStats = repositoriesStatsArchive.getArchivedStats();
         assertThat(archivedStats.size(), equalTo(statsToBeRetainedCount));
         for (RepositoryStatsSnapshot repositoryStatsSnapshot : archivedStats) {
-            assertThat(
-                repositoryStatsSnapshot.getRepositoryStats().requestCounts,
-                equalTo(org.opensearch.common.collect.Map.of("GET", 10L))
-            );
+            assertThat(repositoryStatsSnapshot.getRepositoryStats().requestCounts, equalTo(Map.of("GET", 10L)));
         }
     }
 
@@ -126,14 +121,11 @@ public class RepositoriesStatsArchiveTests extends OpenSearchTestCase {
 
     private RepositoryStatsSnapshot createRepositoryStats(RepositoryStats repositoryStats, long clusterVersion) {
         RepositoryInfo repositoryInfo = new RepositoryInfo(
-            UUIDs.randomBase64UUID(),
             randomAlphaOfLength(10),
             randomAlphaOfLength(10),
-            org.opensearch.common.collect.Map.of("bucket", randomAlphaOfLength(10)),
-            System.currentTimeMillis(),
-            null
+            Map.of("bucket", randomAlphaOfLength(10))
         );
-        return new RepositoryStatsSnapshot(repositoryInfo, repositoryStats, clusterVersion, true);
+        return new RepositoryStatsSnapshot(repositoryInfo, repositoryStats, clusterVersion);
     }
 
 }

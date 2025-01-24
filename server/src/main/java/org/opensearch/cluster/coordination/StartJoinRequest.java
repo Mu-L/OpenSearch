@@ -32,8 +32,8 @@
 package org.opensearch.cluster.coordination;
 
 import org.opensearch.cluster.node.DiscoveryNode;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
 import org.opensearch.transport.TransportRequest;
 
 import java.io.IOException;
@@ -64,7 +64,7 @@ public class StartJoinRequest extends TransportRequest {
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         super.writeTo(out);
-        sourceNode.writeTo(out);
+        sourceNode.writeToWithAttribute(out);
         out.writeLong(term);
     }
 

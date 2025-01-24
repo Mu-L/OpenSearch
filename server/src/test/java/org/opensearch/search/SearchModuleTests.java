@@ -33,13 +33,15 @@ package org.opensearch.search;
 
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.util.CharsRefBuilder;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
 import org.opensearch.common.settings.Settings;
+import org.opensearch.common.util.FeatureFlags;
 import org.opensearch.common.xcontent.LoggingDeprecationHandler;
-import org.opensearch.common.xcontent.NamedXContentRegistry;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
+import org.opensearch.index.IndexSettings;
 import org.opensearch.index.query.QueryBuilder;
 import org.opensearch.index.query.QueryRewriteContext;
 import org.opensearch.index.query.QueryShardContext;
@@ -50,6 +52,8 @@ import org.opensearch.search.aggregations.AggregationBuilder;
 import org.opensearch.search.aggregations.AggregatorFactories.Builder;
 import org.opensearch.search.aggregations.AggregatorFactory;
 import org.opensearch.search.aggregations.BaseAggregationBuilder;
+import org.opensearch.search.aggregations.ConcurrentAggregationProcessor;
+import org.opensearch.search.aggregations.DefaultAggregationProcessor;
 import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.InternalAggregation.ReduceContext;
 import org.opensearch.search.aggregations.bucket.terms.TermsAggregationBuilder;
@@ -66,6 +70,7 @@ import org.opensearch.search.aggregations.support.ValuesSourceAggregatorFactory;
 import org.opensearch.search.aggregations.support.ValuesSourceConfig;
 import org.opensearch.search.aggregations.support.ValuesSourceRegistry;
 import org.opensearch.search.aggregations.support.ValuesSourceType;
+import org.opensearch.search.deciders.ConcurrentSearchRequestDecider;
 import org.opensearch.search.fetch.FetchSubPhase;
 import org.opensearch.search.fetch.subphase.ExplainPhase;
 import org.opensearch.search.fetch.subphase.highlight.CustomHighlighter;
@@ -73,6 +78,10 @@ import org.opensearch.search.fetch.subphase.highlight.FastVectorHighlighter;
 import org.opensearch.search.fetch.subphase.highlight.Highlighter;
 import org.opensearch.search.fetch.subphase.highlight.PlainHighlighter;
 import org.opensearch.search.fetch.subphase.highlight.UnifiedHighlighter;
+import org.opensearch.search.query.ConcurrentQueryPhaseSearcher;
+import org.opensearch.search.query.QueryPhase;
+import org.opensearch.search.query.QueryPhaseSearcher;
+import org.opensearch.search.query.QueryPhaseSearcherWrapper;
 import org.opensearch.search.rescore.QueryRescorerBuilder;
 import org.opensearch.search.rescore.RescoreContext;
 import org.opensearch.search.rescore.RescorerBuilder;
@@ -86,6 +95,8 @@ import org.opensearch.search.suggest.SuggestionSearchContext.SuggestionContext;
 import org.opensearch.search.suggest.term.TermSuggestion;
 import org.opensearch.search.suggest.term.TermSuggestionBuilder;
 import org.opensearch.test.OpenSearchTestCase;
+import org.opensearch.test.TestSearchContext;
+import org.opensearch.threadpool.ThreadPool;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -93,6 +104,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static java.util.Collections.emptyList;
@@ -102,6 +114,8 @@ import static java.util.stream.Collectors.toList;
 import static java.util.stream.Collectors.toSet;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.hasSize;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 public class SearchModuleTests extends OpenSearchTestCase {
 
@@ -409,6 +423,146 @@ public class SearchModuleTests extends OpenSearchTestCase {
         );
     }
 
+    public void testDefaultQueryPhaseSearcher() {
+        SearchModule searchModule = new SearchModule(Settings.EMPTY, Collections.emptyList());
+        TestSearchContext searchContext = new TestSearchContext(null);
+        QueryPhase queryPhase = searchModule.getQueryPhase();
+        assertTrue(queryPhase.getQueryPhaseSearcher() instanceof QueryPhaseSearcherWrapper);
+        assertTrue(queryPhase.getQueryPhaseSearcher().aggregationProcessor(searchContext) instanceof DefaultAggregationProcessor);
+    }
+
+    public void testConcurrentQueryPhaseSearcher() {
+        SearchModule searchModule = new SearchModule(Settings.EMPTY, Collections.emptyList());
+        TestSearchContext searchContext = new TestSearchContext(null);
+        searchContext.setConcurrentSegmentSearchEnabled(true);
+        QueryPhase queryPhase = searchModule.getQueryPhase();
+        assertTrue(queryPhase.getQueryPhaseSearcher() instanceof QueryPhaseSearcherWrapper);
+        assertTrue(queryPhase.getQueryPhaseSearcher().aggregationProcessor(searchContext) instanceof ConcurrentAggregationProcessor);
+        FeatureFlags.initializeFeatureFlags(Settings.EMPTY);
+    }
+
+    public void testPluginQueryPhaseSearcher() {
+        QueryPhaseSearcher queryPhaseSearcher = (searchContext, searcher, query, collectors, hasFilterCollector, hasTimeout) -> false;
+        SearchPlugin plugin1 = new SearchPlugin() {
+            @Override
+            public Optional<QueryPhaseSearcher> getQueryPhaseSearcher() {
+                return Optional.of(queryPhaseSearcher);
+            }
+        };
+        SearchModule searchModule = new SearchModule(Settings.EMPTY, Collections.singletonList(plugin1));
+        QueryPhase queryPhase = searchModule.getQueryPhase();
+        TestSearchContext searchContext = new TestSearchContext(null);
+        assertEquals(queryPhaseSearcher, queryPhase.getQueryPhaseSearcher());
+        assertTrue(queryPhaseSearcher.aggregationProcessor(searchContext) instanceof DefaultAggregationProcessor);
+        FeatureFlags.initializeFeatureFlags(Settings.EMPTY);
+    }
+
+    public void testMultiplePluginRegisterQueryPhaseSearcher() {
+        SearchPlugin plugin1 = new SearchPlugin() {
+            @Override
+            public Optional<QueryPhaseSearcher> getQueryPhaseSearcher() {
+                return Optional.of(mock(QueryPhaseSearcher.class));
+            }
+        };
+        SearchPlugin plugin2 = new SearchPlugin() {
+            @Override
+            public Optional<QueryPhaseSearcher> getQueryPhaseSearcher() {
+                return Optional.of(new ConcurrentQueryPhaseSearcher());
+            }
+        };
+        List<SearchPlugin> searchPlugins = new ArrayList<>();
+        searchPlugins.add(plugin1);
+        searchPlugins.add(plugin2);
+        expectThrows(IllegalStateException.class, () -> new SearchModule(Settings.EMPTY, searchPlugins));
+    }
+
+    public void testIndexSearcher() {
+        ThreadPool threadPool = mock(ThreadPool.class);
+        SearchModule searchModule = new SearchModule(Settings.EMPTY, Collections.emptyList());
+        searchModule.getIndexSearcherExecutor(threadPool);
+        verify(threadPool).executor(ThreadPool.Names.INDEX_SEARCHER);
+    }
+
+    public void testMultiplePluginRegisterIndexSearcherProvider() {
+        SearchPlugin plugin1 = new SearchPlugin() {
+            @Override
+            public Optional<ExecutorServiceProvider> getIndexSearcherExecutorProvider() {
+                return Optional.of(mock(ExecutorServiceProvider.class));
+            }
+        };
+        SearchPlugin plugin2 = new SearchPlugin() {
+            @Override
+            public Optional<ExecutorServiceProvider> getIndexSearcherExecutorProvider() {
+                return Optional.of(mock(ExecutorServiceProvider.class));
+            }
+        };
+        List<SearchPlugin> searchPlugins = new ArrayList<>();
+        searchPlugins.add(plugin1);
+        searchPlugins.add(plugin2);
+        expectThrows(IllegalStateException.class, () -> new SearchModule(Settings.EMPTY, searchPlugins));
+    }
+
+    public void testRegisterConcurrentSearchRequestDecidersNoExternalPlugins() {
+        SearchModule searchModule = new SearchModule(Settings.EMPTY, Collections.emptyList());
+        assertEquals(searchModule.getConcurrentSearchRequestDeciderFactories().size(), 0);
+    }
+
+    public void testRegisterConcurrentSearchRequestDecidersExternalPluginsWithNoDeciders() {
+        SearchPlugin plugin1 = new SearchPlugin() {
+            @Override
+            public Optional<ExecutorServiceProvider> getIndexSearcherExecutorProvider() {
+                return Optional.of(mock(ExecutorServiceProvider.class));
+            }
+        };
+        SearchPlugin plugin2 = new SearchPlugin() {
+        };
+
+        List<SearchPlugin> searchPlugins = new ArrayList<>();
+        searchPlugins.add(plugin1);
+        searchPlugins.add(plugin2);
+        SearchModule searchModule = new SearchModule(Settings.EMPTY, searchPlugins);
+
+        assertEquals(searchModule.getConcurrentSearchRequestDeciderFactories().size(), 0);
+    }
+
+    public void testRegisterConcurrentSearchRequestDecidersExternalPluginsWithDeciders() {
+        SearchPlugin pluginDecider1 = new SearchPlugin() {
+            @Override
+            public Optional<ExecutorServiceProvider> getIndexSearcherExecutorProvider() {
+                return Optional.of(mock(ExecutorServiceProvider.class));
+            }
+
+            @Override
+            public Optional<ConcurrentSearchRequestDecider.Factory> getConcurrentSearchRequestDeciderFactory() {
+                return Optional.of(new ConcurrentSearchRequestDecider.Factory() {
+                    @Override
+                    public Optional<ConcurrentSearchRequestDecider> create(IndexSettings indexSettings) {
+                        return Optional.of(mock(ConcurrentSearchRequestDecider.class));
+                    }
+                });
+            }
+        };
+
+        SearchPlugin pluginDecider2 = new SearchPlugin() {
+            @Override
+            public Optional<ConcurrentSearchRequestDecider.Factory> getConcurrentSearchRequestDeciderFactory() {
+                return Optional.of(new ConcurrentSearchRequestDecider.Factory() {
+                    @Override
+                    public Optional<ConcurrentSearchRequestDecider> create(IndexSettings indexSettings) {
+                        return Optional.of(mock(ConcurrentSearchRequestDecider.class));
+                    }
+                });
+            }
+        };
+
+        List<SearchPlugin> searchPlugins = new ArrayList<>();
+        searchPlugins.add(pluginDecider1);
+        searchPlugins.add(pluginDecider2);
+
+        SearchModule searchModule = new SearchModule(Settings.EMPTY, searchPlugins);
+        assertEquals(searchModule.getConcurrentSearchRequestDeciderFactories().size(), 2);
+    }
+
     private static final String[] NON_DEPRECATED_QUERIES = new String[] {
         "bool",
         "boosting",
@@ -454,7 +608,8 @@ public class SearchModuleTests extends OpenSearchTestCase {
         "terms_set",
         "wildcard",
         "wrapper",
-        "distance_feature" };
+        "distance_feature",
+        "template" };
 
     // add here deprecated queries to make sure we log a deprecation warnings when they are used
     private static final String[] DEPRECATED_QUERIES = new String[] { "common", "field_masking_span" };

@@ -34,7 +34,7 @@ package org.opensearch.search.aggregations.metrics;
 import org.apache.logging.log4j.LogManager;
 import org.opensearch.action.search.SearchResponse;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.util.CollectionUtils;
+import org.opensearch.core.common.util.CollectionUtils;
 import org.opensearch.plugins.Plugin;
 import org.opensearch.script.Script;
 import org.opensearch.script.ScriptType;
@@ -74,6 +74,10 @@ import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.sameInstance;
 
 public class HDRPercentilesIT extends AbstractNumericTestCase {
+
+    public HDRPercentilesIT(Settings staticSettings) {
+        super(staticSettings);
+    }
 
     @Override
     protected Collection<Class<? extends Plugin>> nodePlugins() {
@@ -147,7 +151,7 @@ public class HDRPercentilesIT extends AbstractNumericTestCase {
             )
             .get();
 
-        assertThat(searchResponse.getHits().getTotalHits().value, equalTo(2L));
+        assertThat(searchResponse.getHits().getTotalHits().value(), equalTo(2L));
         Histogram histo = searchResponse.getAggregations().get("histo");
         assertThat(histo, notNullValue());
         Histogram.Bucket bucket = histo.getBuckets().get(1);
@@ -173,7 +177,7 @@ public class HDRPercentilesIT extends AbstractNumericTestCase {
             )
             .get();
 
-        assertThat(searchResponse.getHits().getTotalHits().value, equalTo(0L));
+        assertThat(searchResponse.getHits().getTotalHits().value(), equalTo(0L));
 
         Percentiles percentiles = searchResponse.getAggregations().get("percentiles");
         assertThat(percentiles, notNullValue());
@@ -687,6 +691,7 @@ public class HDRPercentilesIT extends AbstractNumericTestCase {
                 .getMissCount(),
             equalTo(2L)
         );
+        internalCluster().wipeIndices("cache_test_idx");
     }
 
 }

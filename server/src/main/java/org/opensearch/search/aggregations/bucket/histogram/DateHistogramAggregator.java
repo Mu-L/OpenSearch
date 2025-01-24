@@ -33,6 +33,7 @@ package org.opensearch.search.aggregations.bucket.histogram;
 
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.SortedNumericDocValues;
+import org.apache.lucene.search.CollectionTerminatedException;
 import org.apache.lucene.search.ScoreMode;
 import org.apache.lucene.util.CollectionUtil;
 import org.opensearch.common.Nullable;
@@ -41,12 +42,14 @@ import org.opensearch.common.lease.Releasables;
 import org.opensearch.search.DocValueFormat;
 import org.opensearch.search.aggregations.Aggregator;
 import org.opensearch.search.aggregations.AggregatorFactories;
-import org.opensearch.search.aggregations.CardinalityUpperBound;
 import org.opensearch.search.aggregations.BucketOrder;
+import org.opensearch.search.aggregations.CardinalityUpperBound;
 import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.LeafBucketCollector;
 import org.opensearch.search.aggregations.LeafBucketCollectorBase;
 import org.opensearch.search.aggregations.bucket.BucketsAggregator;
+import org.opensearch.search.aggregations.bucket.filterrewrite.DateHistogramAggregatorBridge;
+import org.opensearch.search.aggregations.bucket.filterrewrite.FilterRewriteOptimizationContext;
 import org.opensearch.search.aggregations.bucket.terms.LongKeyedBucketOrds;
 import org.opensearch.search.aggregations.support.ValuesSource;
 import org.opensearch.search.aggregations.support.ValuesSourceConfig;
@@ -56,6 +59,9 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.Map;
 import java.util.function.BiConsumer;
+import java.util.function.Function;
+
+import static org.opensearch.search.aggregations.bucket.filterrewrite.DateHistogramAggregatorBridge.segmentMatchAll;
 
 /**
  * An aggregator for date values. Every date is rounded down using a configured
@@ -66,7 +72,6 @@ import java.util.function.BiConsumer;
  * @opensearch.internal
  */
 class DateHistogramAggregator extends BucketsAggregator implements SizedBucketAggregator {
-
     private final ValuesSource.Numeric valuesSource;
     private final DocValueFormat formatter;
     private final Rounding rounding;
@@ -76,12 +81,12 @@ class DateHistogramAggregator extends BucketsAggregator implements SizedBucketAg
     private final Rounding.Prepared preparedRounding;
     private final BucketOrder order;
     private final boolean keyed;
-
     private final long minDocCount;
     private final LongBounds extendedBounds;
     private final LongBounds hardBounds;
-
     private final LongKeyedBucketOrds bucketOrds;
+
+    private final FilterRewriteOptimizationContext filterRewriteOptimizationContext;
 
     DateHistogramAggregator(
         String name,
@@ -99,7 +104,6 @@ class DateHistogramAggregator extends BucketsAggregator implements SizedBucketAg
         CardinalityUpperBound cardinality,
         Map<String, Object> metadata
     ) throws IOException {
-
         super(name, factories, aggregationContext, parent, CardinalityUpperBound.MANY, metadata);
         this.rounding = rounding;
         this.preparedRounding = preparedRounding;
@@ -114,6 +118,39 @@ class DateHistogramAggregator extends BucketsAggregator implements SizedBucketAg
         this.formatter = valuesSourceConfig.format();
 
         bucketOrds = LongKeyedBucketOrds.build(context.bigArrays(), cardinality);
+
+        DateHistogramAggregatorBridge bridge = new DateHistogramAggregatorBridge() {
+            @Override
+            protected boolean canOptimize() {
+                return canOptimize(valuesSourceConfig);
+            }
+
+            @Override
+            protected void prepare() throws IOException {
+                buildRanges(context);
+            }
+
+            @Override
+            protected Rounding getRounding(long low, long high) {
+                return rounding;
+            }
+
+            @Override
+            protected Rounding.Prepared getRoundingPrepared() {
+                return preparedRounding;
+            }
+
+            @Override
+            protected long[] processHardBounds(long[] bounds) {
+                return super.processHardBounds(bounds, hardBounds);
+            }
+
+            @Override
+            protected Function<Long, Long> bucketOrdProducer() {
+                return (key) -> bucketOrds.add(0, preparedRounding.round((long) key));
+            }
+        };
+        filterRewriteOptimizationContext = new FilterRewriteOptimizationContext(bridge, parent, subAggregators.length, context);
     }
 
     @Override
@@ -129,6 +166,10 @@ class DateHistogramAggregator extends BucketsAggregator implements SizedBucketAg
         if (valuesSource == null) {
             return LeafBucketCollector.NO_OP_COLLECTOR;
         }
+
+        boolean optimized = filterRewriteOptimizationContext.tryOptimize(ctx, this::incrementBucketDocCount, segmentMatchAll(context, ctx));
+        if (optimized) throw new CollectionTerminatedException();
+
         SortedNumericDocValues values = valuesSource.longValues(ctx);
         return new LeafBucketCollectorBase(sub, values) {
             @Override
@@ -162,34 +203,29 @@ class DateHistogramAggregator extends BucketsAggregator implements SizedBucketAg
 
     @Override
     public InternalAggregation[] buildAggregations(long[] owningBucketOrds) throws IOException {
-        return buildAggregationsForVariableBuckets(
-            owningBucketOrds,
-            bucketOrds,
-            (bucketValue, docCount, subAggregationResults) -> {
-                return new InternalDateHistogram.Bucket(bucketValue, docCount, keyed, formatter, subAggregationResults);
-            },
-            (owningBucketOrd, buckets) -> {
-                // the contract of the histogram aggregation is that shards must return buckets ordered by key in ascending order
-                CollectionUtil.introSort(buckets, BucketOrder.key(true).comparator());
+        return buildAggregationsForVariableBuckets(owningBucketOrds, bucketOrds, (bucketValue, docCount, subAggregationResults) -> {
+            return new InternalDateHistogram.Bucket(bucketValue, docCount, keyed, formatter, subAggregationResults);
+        }, (owningBucketOrd, buckets) -> {
+            // the contract of the histogram aggregation is that shards must return buckets ordered by key in ascending order
+            CollectionUtil.introSort(buckets, BucketOrder.key(true).comparator());
 
-                // value source will be null for unmapped fields
-                // Important: use `rounding` here, not `shardRounding`
-                InternalDateHistogram.EmptyBucketInfo emptyBucketInfo = minDocCount == 0
-                    ? new InternalDateHistogram.EmptyBucketInfo(rounding.withoutOffset(), buildEmptySubAggregations(), extendedBounds)
-                    : null;
-                return new InternalDateHistogram(
-                    name,
-                    buckets,
-                    order,
-                    minDocCount,
-                    rounding.offset(),
-                    emptyBucketInfo,
-                    formatter,
-                    keyed,
-                    metadata()
-                );
-            }
-        );
+            // value source will be null for unmapped fields
+            // Important: use `rounding` here, not `shardRounding`
+            InternalDateHistogram.EmptyBucketInfo emptyBucketInfo = minDocCount == 0
+                ? new InternalDateHistogram.EmptyBucketInfo(rounding.withoutOffset(), buildEmptySubAggregations(), extendedBounds)
+                : null;
+            return new InternalDateHistogram(
+                name,
+                buckets,
+                order,
+                minDocCount,
+                rounding.offset(),
+                emptyBucketInfo,
+                formatter,
+                keyed,
+                metadata()
+            );
+        });
     }
 
     @Override
@@ -218,12 +254,11 @@ class DateHistogramAggregator extends BucketsAggregator implements SizedBucketAg
     @Override
     public void collectDebugInfo(BiConsumer<String, Object> add) {
         add.accept("total_buckets", bucketOrds.size());
+        filterRewriteOptimizationContext.populateDebugInfo(add);
     }
 
     /**
-     * Returns the size of the bucket in specified units.
-     *
-     * If unitSize is null, returns 1.0
+     * @return the size of the bucket in specified units, or 1.0 if unitSize is null
      */
     @Override
     public double bucketSize(long bucket, Rounding.DateTimeUnit unitSize) {

@@ -42,9 +42,9 @@ import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.cluster.routing.ShardRoutingState;
 import org.opensearch.cluster.routing.allocation.decider.FilterAllocationDecider;
 import org.opensearch.cluster.routing.allocation.decider.ThrottlingAllocationDecider;
-import org.opensearch.common.Strings;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Settings;
+import org.opensearch.core.common.Strings;
 import org.opensearch.index.query.QueryBuilders;
 import org.opensearch.test.OpenSearchIntegTestCase;
 import org.opensearch.test.OpenSearchIntegTestCase.ClusterScope;
@@ -82,7 +82,8 @@ public class FilteringAllocationIT extends OpenSearchIntegTestCase {
                 .execute()
                 .actionGet()
                 .getHits()
-                .getTotalHits().value,
+                .getTotalHits()
+                .value(),
             equalTo(100L)
         );
 
@@ -123,7 +124,8 @@ public class FilteringAllocationIT extends OpenSearchIntegTestCase {
                 .execute()
                 .actionGet()
                 .getHits()
-                .getTotalHits().value,
+                .getTotalHits()
+                .value(),
             equalTo(100L)
         );
     }
@@ -197,7 +199,8 @@ public class FilteringAllocationIT extends OpenSearchIntegTestCase {
                 .execute()
                 .actionGet()
                 .getHits()
-                .getTotalHits().value,
+                .getTotalHits()
+                .value(),
             equalTo(100L)
         );
 

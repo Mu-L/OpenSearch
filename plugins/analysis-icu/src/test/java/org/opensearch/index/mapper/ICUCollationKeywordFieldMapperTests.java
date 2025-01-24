@@ -39,15 +39,14 @@ import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.IndexableField;
 import org.apache.lucene.index.IndexableFieldType;
 import org.apache.lucene.util.BytesRef;
-import org.opensearch.common.Strings;
-import org.opensearch.common.collect.List;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.plugin.analysis.icu.AnalysisICUPlugin;
 import org.opensearch.plugins.Plugin;
 
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.List;
 import java.util.Set;
 
 import static org.hamcrest.Matchers.containsString;
@@ -69,7 +68,7 @@ public class ICUCollationKeywordFieldMapperTests extends FieldMapperTestCase2<IC
 
     @Override
     protected Set<String> unsupportedProperties() {
-        return org.opensearch.common.collect.Set.of("analyzer", "similarity");
+        return Set.of("analyzer", "similarity");
     }
 
     @Override
@@ -96,7 +95,7 @@ public class ICUCollationKeywordFieldMapperTests extends FieldMapperTestCase2<IC
 
     public void testDefaults() throws Exception {
         DocumentMapper mapper = createDocumentMapper(fieldMapping(this::minimalMapping));
-        assertEquals(Strings.toString(fieldMapping(this::minimalMapping)), mapper.mappingSource().toString());
+        assertEquals(fieldMapping(this::minimalMapping).toString(), mapper.mappingSource().toString());
 
         ParsedDocument doc = mapper.parse(source(b -> b.field("field", "1234")));
         IndexableField[] fields = doc.rootDoc().getFields("field");

@@ -123,6 +123,76 @@ public class SystemIndexRestIT extends HttpSmokeTestCase {
         }
     }
 
+    public void testSystemIndexCreatedWithoutAnyTemplates() throws Exception {
+        // create template
+        {
+            Request templateRequest = new Request("POST", "_component_template/error_mapping_test_template");
+            String jsonBody = "{\n" +
+                "  \"template\": {\n" +
+                "    \"mappings\": {\n" +
+                "      \"properties\": {\n" +
+                "        \"error\" : {\n" +
+                "          \"type\": \"nested\",\n" +
+                "          \"properties\": {\n" +
+                "            \"message\": {\n" +
+                "              \"type\": \"text\"\n" +
+                "            },\n" +
+                "            \"status\": {\n" +
+                "              \"type\": \"integer\"\n" +
+                "            }\n" +
+                "          }\n" +
+                "        }\n" +
+                "      }\n" +
+                "    }\n" +
+                "  }\n" +
+                "}";
+
+            templateRequest.setJsonEntity(jsonBody);
+            Response resp = getRestClient().performRequest(templateRequest);
+            assertThat(resp.getStatusLine().getStatusCode(), equalTo(200));
+        }
+
+
+        // apply template to indices
+        {
+            Request applyTemplateRequest = new Request("POST", "_index_template/match_all_test_template");
+            String jsonBody = "{\n" +
+                "  \"index_patterns\": [\n" +
+                "    \"*system-idx*\"\n" +
+                "  ],\n" +
+                "  \"template\": {\n" +
+                "    \"settings\": {}\n" +
+                "  },\n" +
+                "  \"priority\": 10,\n" +
+                "  \"composed_of\": [\n" +
+                "    \"error_mapping_test_template\"\n" +
+                "  ],\n" +
+                "  \"version\": 1\n" +
+                "}";
+
+            applyTemplateRequest.setJsonEntity(jsonBody);
+            Response resp = getRestClient().performRequest(applyTemplateRequest);
+            assertThat(resp.getStatusLine().getStatusCode(), equalTo(200));
+        }
+
+        // create system index - success
+        {
+            Request indexRequest = new Request("PUT", "/" + SystemIndexTestPlugin.SYSTEM_INDEX_NAME);
+            String jsonBody = "{\n" +
+                "  \"mappings\": {\n" +
+                "    \"properties\": {\n" +
+                "      \"error\": {\n" +
+                "        \"type\": \"text\"\n" +
+                "      }\n" +
+                "    }\n" +
+                "  }\n" +
+                "}";
+            indexRequest.setJsonEntity(jsonBody);
+            Response resp = getRestClient().performRequest(indexRequest);
+            assertThat(resp.getStatusLine().getStatusCode(), equalTo(200));
+        }
+    }
+
     private void assertDeprecationWarningOnAccess(String queryPattern, String warningIndexName) throws IOException {
         String expectedWarning = "this request accesses system indices: [" + warningIndexName + "], but in a " +
             "future major version, direct access to system indices will be prevented by default";
@@ -157,7 +227,7 @@ public class SystemIndexRestIT extends HttpSmokeTestCase {
                                                  IndexScopedSettings indexScopedSettings, SettingsFilter settingsFilter,
                                                  IndexNameExpressionResolver indexNameExpressionResolver,
                                                  Supplier<DiscoveryNodes> nodesInCluster) {
-            return org.opensearch.common.collect.List.of(new AddDocRestHandler());
+            return List.of(new AddDocRestHandler());
         }
 
         @Override
@@ -178,7 +248,7 @@ public class SystemIndexRestIT extends HttpSmokeTestCase {
 
             @Override
             public List<Route> routes() {
-                return org.opensearch.common.collect.List.of(new Route(RestRequest.Method.POST, "/_sys_index_test/add_doc/{id}"));
+                return List.of(new Route(RestRequest.Method.POST, "/_sys_index_test/add_doc/{id}"));
             }
 
             @Override
@@ -186,7 +256,7 @@ public class SystemIndexRestIT extends HttpSmokeTestCase {
                 IndexRequest indexRequest = new IndexRequest(SYSTEM_INDEX_NAME);
                 indexRequest.id(request.param("id"));
                 indexRequest.setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE);
-                indexRequest.source(org.opensearch.common.collect.Map.of("some_field", "some_value"));
+                indexRequest.source(Map.of("some_field", "some_value"));
                 return channel -> client.index(indexRequest,
                     new RestStatusToXContentListener<>(channel, r -> r.getLocation(indexRequest.routing())));
             }
