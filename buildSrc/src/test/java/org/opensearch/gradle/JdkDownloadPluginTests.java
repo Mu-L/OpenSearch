@@ -38,6 +38,8 @@ import org.gradle.api.Project;
 import org.gradle.testfixtures.ProjectBuilder;
 import org.junit.BeforeClass;
 
+import java.util.UUID;
+
 import static org.hamcrest.CoreMatchers.equalTo;
 
 public class JdkDownloadPluginTests extends GradleUnitTestCase {
@@ -148,7 +150,8 @@ public class JdkDownloadPluginTests extends GradleUnitTestCase {
     }
 
     private Project createProject() {
-        Project project = ProjectBuilder.builder().withParent(rootProject).build();
+        final String name = UUID.randomUUID().toString();
+        Project project = ProjectBuilder.builder().withName(name).withParent(rootProject).build();
         project.getPlugins().apply("opensearch.jdk-download");
         return project;
     }

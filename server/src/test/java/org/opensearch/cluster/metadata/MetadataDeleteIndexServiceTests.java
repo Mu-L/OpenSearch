@@ -40,10 +40,9 @@ import org.opensearch.cluster.block.ClusterBlocks;
 import org.opensearch.cluster.routing.RoutingTable;
 import org.opensearch.cluster.routing.allocation.AllocationService;
 import org.opensearch.cluster.service.ClusterService;
-import org.opensearch.common.collect.ImmutableOpenMap;
 import org.opensearch.common.collect.Tuple;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.index.Index;
+import org.opensearch.core.index.Index;
 import org.opensearch.index.IndexNotFoundException;
 import org.opensearch.repositories.IndexId;
 import org.opensearch.snapshots.Snapshot;
@@ -55,10 +54,11 @@ import org.opensearch.test.VersionUtils;
 import org.hamcrest.core.IsNull;
 import org.junit.Before;
 
-import java.util.HashSet;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -98,7 +98,7 @@ public class MetadataDeleteIndexServiceTests extends OpenSearchTestCase {
         String index = randomAlphaOfLength(5);
         Snapshot snapshot = new Snapshot("doesn't matter", new SnapshotId("snapshot name", "snapshot uuid"));
         SnapshotsInProgress snaps = SnapshotsInProgress.of(
-            org.opensearch.common.collect.List.of(
+            List.of(
                 new SnapshotsInProgress.Entry(
                     snapshot,
                     true,
@@ -108,10 +108,11 @@ public class MetadataDeleteIndexServiceTests extends OpenSearchTestCase {
                     Collections.emptyList(),
                     System.currentTimeMillis(),
                     (long) randomIntBetween(0, 1000),
-                    ImmutableOpenMap.of(),
+                    Map.of(),
                     null,
                     SnapshotInfoTests.randomUserMetadata(),
-                    VersionUtils.randomVersion(random())
+                    VersionUtils.randomVersion(random()),
+                    false
                 )
             )
         );
@@ -153,14 +154,14 @@ public class MetadataDeleteIndexServiceTests extends OpenSearchTestCase {
         int numBackingIndices = randomIntBetween(2, 5);
         String dataStreamName = randomAlphaOfLength(6).toLowerCase(Locale.ROOT);
         ClusterState before = DataStreamTestHelper.getClusterStateWithDataStreams(
-            org.opensearch.common.collect.List.of(new Tuple<>(dataStreamName, numBackingIndices)),
-            org.opensearch.common.collect.List.of()
+            List.of(new Tuple<>(dataStreamName, numBackingIndices)),
+            List.of()
         );
 
         int numIndexToDelete = randomIntBetween(1, numBackingIndices - 1);
 
         Index indexToDelete = before.metadata().index(DataStream.getDefaultBackingIndexName(dataStreamName, numIndexToDelete)).getIndex();
-        ClusterState after = service.deleteIndices(before, org.opensearch.common.collect.Set.of(indexToDelete));
+        ClusterState after = service.deleteIndices(before, Set.of(indexToDelete));
 
         assertThat(after.metadata().getIndices().get(indexToDelete.getName()), IsNull.nullValue());
         assertThat(after.metadata().getIndices().size(), equalTo(numBackingIndices - 1));
@@ -175,8 +176,8 @@ public class MetadataDeleteIndexServiceTests extends OpenSearchTestCase {
         int numBackingIndicesToDelete = randomIntBetween(2, numBackingIndices - 1);
         String dataStreamName = randomAlphaOfLength(6).toLowerCase(Locale.ROOT);
         ClusterState before = DataStreamTestHelper.getClusterStateWithDataStreams(
-            org.opensearch.common.collect.List.of(new Tuple<>(dataStreamName, numBackingIndices)),
-            org.opensearch.common.collect.List.of()
+            List.of(new Tuple<>(dataStreamName, numBackingIndices)),
+            List.of()
         );
 
         List<Integer> indexNumbersToDelete = randomSubsetOf(
@@ -204,15 +205,12 @@ public class MetadataDeleteIndexServiceTests extends OpenSearchTestCase {
         int numBackingIndices = randomIntBetween(1, 5);
         String dataStreamName = randomAlphaOfLength(6).toLowerCase(Locale.ROOT);
         ClusterState before = DataStreamTestHelper.getClusterStateWithDataStreams(
-            org.opensearch.common.collect.List.of(new Tuple<>(dataStreamName, numBackingIndices)),
-            org.opensearch.common.collect.List.of()
+            List.of(new Tuple<>(dataStreamName, numBackingIndices)),
+            List.of()
         );
 
         Index indexToDelete = before.metadata().index(DataStream.getDefaultBackingIndexName(dataStreamName, numBackingIndices)).getIndex();
-        Exception e = expectThrows(
-            IllegalArgumentException.class,
-            () -> service.deleteIndices(before, org.opensearch.common.collect.Set.of(indexToDelete))
-        );
+        Exception e = expectThrows(IllegalArgumentException.class, () -> service.deleteIndices(before, Set.of(indexToDelete)));
 
         assertThat(
             e.getMessage(),

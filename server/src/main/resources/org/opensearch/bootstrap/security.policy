@@ -46,8 +46,11 @@ grant codeBase "${codebase.opensearch-secure-sm}" {
 grant codeBase "${codebase.opensearch}" {
   // needed for loading plugins which may expect the context class loader to be set
   permission java.lang.RuntimePermission "setContextClassLoader";
+  permission java.lang.RuntimePermission "getClassLoader";
   // needed for SPI class loading
   permission java.lang.RuntimePermission "accessDeclaredMembers";
+  permission org.opensearch.secure_sm.ThreadContextPermission "markAsSystemContext";
+  permission org.opensearch.secure_sm.ThreadContextPermission "stashWithOrigin";
 };
 
 //// Very special jar permissions:
@@ -79,6 +82,17 @@ grant codeBase "${codebase.jna}" {
   permission java.lang.RuntimePermission "accessDeclaredMembers";
 };
 
+
+// ZSTD compression
+grant codeBase "${codebase.zstd-jni}" {
+  permission java.lang.RuntimePermission "loadLibrary.*";
+};
+
+// repository-azure plugin and server side streaming
+grant codeBase "${codebase.reactor-core}" {
+  permission java.net.SocketPermission "*", "connect,resolve";
+};
+
 //// Everything else:
 
 grant {
@@ -100,9 +114,6 @@ grant {
   permission jdk.net.NetworkPermission "getOption.TCP_KEEPCOUNT";
   permission jdk.net.NetworkPermission "setOption.TCP_KEEPCOUNT";
 
-  permission java.lang.RuntimePermission "accessDeclaredMembers";
-  permission java.lang.reflect.ReflectPermission "suppressAccessChecks";
-  
   // Allow read access to all system properties
   permission java.util.PropertyPermission "*", "read";
 
@@ -184,5 +195,4 @@ grant {
   permission java.io.FilePermission "/sys/fs/cgroup/cpuacct/-", "read";
   permission java.io.FilePermission "/sys/fs/cgroup/memory", "read";
   permission java.io.FilePermission "/sys/fs/cgroup/memory/-", "read";
-
 };

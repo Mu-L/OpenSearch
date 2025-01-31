@@ -36,9 +36,9 @@ import org.opensearch.action.admin.indices.rollover.Condition;
 import org.opensearch.action.admin.indices.rollover.MaxAgeCondition;
 import org.opensearch.action.admin.indices.rollover.MaxDocsCondition;
 import org.opensearch.action.admin.indices.rollover.MaxSizeCondition;
-import org.opensearch.common.unit.ByteSizeValue;
 import org.opensearch.common.unit.TimeValue;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.core.common.unit.ByteSizeValue;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.test.OpenSearchTestCase;
 
 import java.io.IOException;

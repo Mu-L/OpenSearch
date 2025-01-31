@@ -56,6 +56,8 @@ import org.opensearch.action.admin.indices.recovery.RecoveryAction;
 import org.opensearch.action.admin.indices.recovery.RecoveryRequest;
 import org.opensearch.action.admin.indices.refresh.RefreshRequest;
 import org.opensearch.action.admin.indices.refresh.TransportShardRefreshAction;
+import org.opensearch.action.admin.indices.replication.SegmentReplicationStatsAction;
+import org.opensearch.action.admin.indices.replication.SegmentReplicationStatsRequest;
 import org.opensearch.action.admin.indices.segments.IndicesSegmentsAction;
 import org.opensearch.action.admin.indices.segments.IndicesSegmentsRequest;
 import org.opensearch.action.admin.indices.settings.get.GetSettingsAction;
@@ -82,6 +84,8 @@ import org.opensearch.action.search.SearchRequest;
 import org.opensearch.action.search.SearchResponse;
 import org.opensearch.action.search.SearchTransportService;
 import org.opensearch.action.search.SearchType;
+import org.opensearch.action.support.clustermanager.term.GetTermVersionAction;
+import org.opensearch.action.support.clustermanager.term.GetTermVersionRequest;
 import org.opensearch.action.support.replication.TransportReplicationActionTests;
 import org.opensearch.action.termvectors.MultiTermVectorsAction;
 import org.opensearch.action.termvectors.MultiTermVectorsRequest;
@@ -92,9 +96,9 @@ import org.opensearch.action.update.UpdateRequest;
 import org.opensearch.action.update.UpdateResponse;
 import org.opensearch.client.Requests;
 import org.opensearch.cluster.metadata.IndexNameExpressionResolver;
-import org.opensearch.common.io.stream.NamedWriteableRegistry;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.util.concurrent.ThreadContext;
+import org.opensearch.core.common.io.stream.NamedWriteableRegistry;
 import org.opensearch.index.query.QueryBuilders;
 import org.opensearch.plugins.NetworkPlugin;
 import org.opensearch.plugins.Plugin;
@@ -110,7 +114,6 @@ import org.opensearch.transport.TransportChannel;
 import org.opensearch.transport.TransportInterceptor;
 import org.opensearch.transport.TransportRequest;
 import org.opensearch.transport.TransportRequestHandler;
-
 import org.junit.After;
 import org.junit.Before;
 
@@ -194,6 +197,7 @@ public class IndicesRequestIT extends OpenSearchIntegTestCase {
     }
 
     public void testGetFieldMappings() {
+
         String getFieldMappingsShardAction = GetFieldMappingsAction.NAME + "[index][s]";
         interceptTransportActions(getFieldMappingsShardAction);
 
@@ -468,6 +472,17 @@ public class IndicesRequestIT extends OpenSearchIntegTestCase {
         assertSameIndices(recoveryRequest, recoveryAction);
     }
 
+    public void testSegmentReplicationStats() {
+        String segmentReplicationAction = SegmentReplicationStatsAction.NAME + "[n]";
+        interceptTransportActions(segmentReplicationAction);
+
+        SegmentReplicationStatsRequest segmentReplicationStatsRequest = new SegmentReplicationStatsRequest(randomIndicesOrAliases());
+        internalCluster().coordOnlyNodeClient().admin().indices().segmentReplicationStats(segmentReplicationStatsRequest).actionGet();
+
+        clearInterceptedActions();
+        assertSameIndices(segmentReplicationStatsRequest, segmentReplicationAction);
+    }
+
     public void testSegments() {
         String segmentsAction = IndicesSegmentsAction.NAME + "[n]";
         interceptTransportActions(segmentsAction);
@@ -533,13 +548,14 @@ public class IndicesRequestIT extends OpenSearchIntegTestCase {
     }
 
     public void testGetMappings() {
-        interceptTransportActions(GetMappingsAction.NAME);
-
+        interceptTransportActions(GetTermVersionAction.NAME, GetMappingsAction.NAME);
         GetMappingsRequest getMappingsRequest = new GetMappingsRequest().indices(randomIndicesOrAliases());
         internalCluster().coordOnlyNodeClient().admin().indices().getMappings(getMappingsRequest).actionGet();
 
         clearInterceptedActions();
-        assertSameIndices(getMappingsRequest, GetMappingsAction.NAME);
+
+        assertActionInvocation(GetTermVersionAction.NAME, GetTermVersionRequest.class);
+        assertNoActionInvocation(GetMappingsAction.NAME);
     }
 
     public void testPutMapping() {
@@ -553,8 +569,8 @@ public class IndicesRequestIT extends OpenSearchIntegTestCase {
     }
 
     public void testGetSettings() {
-        interceptTransportActions(GetSettingsAction.NAME);
 
+        interceptTransportActions(GetSettingsAction.NAME);
         GetSettingsRequest getSettingsRequest = new GetSettingsRequest().indices(randomIndicesOrAliases());
         internalCluster().coordOnlyNodeClient().admin().indices().getSettings(getSettingsRequest).actionGet();
 
@@ -590,7 +606,7 @@ public class IndicesRequestIT extends OpenSearchIntegTestCase {
         SearchRequest searchRequest = new SearchRequest(randomIndicesOrAliases).searchType(SearchType.QUERY_THEN_FETCH);
         SearchResponse searchResponse = internalCluster().coordOnlyNodeClient().search(searchRequest).actionGet();
         assertNoFailures(searchResponse);
-        assertThat(searchResponse.getHits().getTotalHits().value, greaterThan(0L));
+        assertThat(searchResponse.getHits().getTotalHits().value(), greaterThan(0L));
 
         clearInterceptedActions();
         assertSameIndices(searchRequest, SearchTransportService.QUERY_ACTION_NAME, SearchTransportService.FETCH_ID_ACTION_NAME);
@@ -615,7 +631,7 @@ public class IndicesRequestIT extends OpenSearchIntegTestCase {
         SearchRequest searchRequest = new SearchRequest(randomIndicesOrAliases).searchType(SearchType.DFS_QUERY_THEN_FETCH);
         SearchResponse searchResponse = internalCluster().coordOnlyNodeClient().search(searchRequest).actionGet();
         assertNoFailures(searchResponse);
-        assertThat(searchResponse.getHits().getTotalHits().value, greaterThan(0L));
+        assertThat(searchResponse.getHits().getTotalHits().value(), greaterThan(0L));
 
         clearInterceptedActions();
         assertSameIndices(
@@ -647,6 +663,21 @@ public class IndicesRequestIT extends OpenSearchIntegTestCase {
                 assertThat(internalRequest.getClass().getName(), indicesRequest.indices(), equalTo(originalRequest.indices()));
                 assertThat(indicesRequest.indicesOptions(), equalTo(originalRequest.indicesOptions()));
             }
+        }
+    }
+
+    private static void assertActionInvocation(String action, Class<? extends TransportRequest> requestClass) {
+        List<TransportRequest> requests = consumeTransportRequests(action);
+        assertFalse(requests.isEmpty());
+        for (TransportRequest internalRequest : requests) {
+            assertTrue(internalRequest.getClass() == requestClass);
+        }
+    }
+
+    private static void assertNoActionInvocation(String... actions) {
+        for (String action : actions) {
+            List<TransportRequest> requests = consumeTransportRequests(action);
+            assertTrue(requests.isEmpty());
         }
     }
 
@@ -769,7 +800,6 @@ public class IndicesRequestIT extends OpenSearchIntegTestCase {
         }
 
         private final Set<String> actions = new HashSet<>();
-
         private final Map<String, List<TransportRequest>> requests = new HashMap<>();
 
         @Override
@@ -819,6 +849,7 @@ public class IndicesRequestIT extends OpenSearchIntegTestCase {
                     }
                 }
                 requestHandler.messageReceived(request, channel, task);
+
             }
         }
     }

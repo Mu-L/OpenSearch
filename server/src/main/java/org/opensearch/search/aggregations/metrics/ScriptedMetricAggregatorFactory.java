@@ -103,7 +103,7 @@ class ScriptedMetricAggregatorFactory extends AggregatorFactory {
         CardinalityUpperBound cardinality,
         Map<String, Object> metadata
     ) throws IOException {
-        Map<String, Object> aggParams = this.aggParams == null ? org.opensearch.common.collect.Map.of() : this.aggParams;
+        Map<String, Object> aggParams = this.aggParams == null ? Map.of() : this.aggParams;
 
         Script reduceScript = deepCopyScript(this.reduceScript, searchContext, aggParams);
 
@@ -122,6 +122,11 @@ class ScriptedMetricAggregatorFactory extends AggregatorFactory {
             parent,
             metadata
         );
+    }
+
+    @Override
+    protected boolean supportsConcurrentSegmentSearch() {
+        return true;
     }
 
     private static Script deepCopyScript(Script script, SearchContext context, Map<String, Object> aggParams) {

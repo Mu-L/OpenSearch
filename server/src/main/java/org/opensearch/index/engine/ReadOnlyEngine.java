@@ -39,19 +39,20 @@ import org.apache.lucene.index.SoftDeletesDirectoryReaderWrapper;
 import org.apache.lucene.search.ReferenceManager;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.Lock;
+import org.opensearch.Version;
 import org.opensearch.common.concurrent.GatedCloseable;
 import org.opensearch.common.lucene.Lucene;
 import org.opensearch.common.lucene.index.OpenSearchDirectoryReader;
-import org.opensearch.core.internal.io.IOUtils;
+import org.opensearch.common.util.io.IOUtils;
 import org.opensearch.index.seqno.SeqNoStats;
 import org.opensearch.index.seqno.SequenceNumbers;
 import org.opensearch.index.store.Store;
 import org.opensearch.index.translog.DefaultTranslogDeletionPolicy;
-import org.opensearch.index.translog.Translog;
-import org.opensearch.index.translog.TranslogManager;
 import org.opensearch.index.translog.NoOpTranslogManager;
+import org.opensearch.index.translog.Translog;
 import org.opensearch.index.translog.TranslogConfig;
 import org.opensearch.index.translog.TranslogDeletionPolicy;
+import org.opensearch.index.translog.TranslogManager;
 import org.opensearch.index.translog.TranslogStats;
 import org.opensearch.search.suggest.completion.CompletionStats;
 import org.opensearch.transport.Transports;
@@ -64,6 +65,8 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+
+import static org.opensearch.index.translog.Translog.EMPTY_TRANSLOG_SNAPSHOT;
 
 /**
  * A basic read-only engine that allows switching a shard to be true read-only temporarily or permanently.
@@ -89,6 +92,7 @@ public class ReadOnlyEngine extends Engine {
     private final CompletionStatsCache completionStatsCache;
     private final boolean requireCompleteHistory;
     private final TranslogManager translogManager;
+    private final Version minimumSupportedVersion;
 
     protected volatile TranslogStats translogStats;
 
@@ -115,6 +119,8 @@ public class ReadOnlyEngine extends Engine {
     ) {
         super(config);
         this.requireCompleteHistory = requireCompleteHistory;
+        // fetch the minimum Version for extended backward compatibility use-cases
+        this.minimumSupportedVersion = config.getIndexSettings().getExtendedCompatibilitySnapshotVersion();
         try {
             Store store = config.getStore();
             store.incRef();
@@ -126,7 +132,11 @@ public class ReadOnlyEngine extends Engine {
                 // we obtain the IW lock even though we never modify the index.
                 // yet this makes sure nobody else does. including some testing tools that try to be messy
                 indexWriterLock = obtainLock ? directory.obtainLock(IndexWriter.WRITE_LOCK_NAME) : null;
-                this.lastCommittedSegmentInfos = Lucene.readSegmentInfos(directory);
+                if (isExtendedCompatibility()) {
+                    this.lastCommittedSegmentInfos = Lucene.readSegmentInfos(directory, this.minimumSupportedVersion);
+                } else {
+                    this.lastCommittedSegmentInfos = Lucene.readSegmentInfos(directory);
+                }
                 if (seqNoStats == null) {
                     seqNoStats = buildSeqNoStats(config, lastCommittedSegmentInfos);
                     ensureMaxSeqNoEqualsToGlobalCheckpoint(seqNoStats);
@@ -142,20 +152,7 @@ public class ReadOnlyEngine extends Engine {
 
                 completionStatsCache = new CompletionStatsCache(() -> acquireSearcher("completion_stats"));
 
-                translogManager = new NoOpTranslogManager(shardId, readLock, this::ensureOpen, this.translogStats, new Translog.Snapshot() {
-                    @Override
-                    public void close() {}
-
-                    @Override
-                    public int totalOperations() {
-                        return 0;
-                    }
-
-                    @Override
-                    public Translog.Operation next() {
-                        return null;
-                    }
-                });
+                translogManager = new NoOpTranslogManager(shardId, readLock, this::ensureOpen, this.translogStats, EMPTY_TRANSLOG_SNAPSHOT);
 
                 success = true;
             } finally {
@@ -215,7 +212,17 @@ public class ReadOnlyEngine extends Engine {
 
     protected DirectoryReader open(IndexCommit commit) throws IOException {
         assert Transports.assertNotTransportThread("opening index commit of a read-only engine");
-        return new SoftDeletesDirectoryReaderWrapper(DirectoryReader.open(commit), Lucene.SOFT_DELETES_FIELD);
+        DirectoryReader reader;
+        if (isExtendedCompatibility()) {
+            reader = DirectoryReader.open(commit, this.minimumSupportedVersion.luceneVersion.major, null);
+        } else {
+            reader = DirectoryReader.open(commit);
+        }
+        return new SoftDeletesDirectoryReaderWrapper(reader, Lucene.SOFT_DELETES_FIELD);
+    }
+
+    private boolean isExtendedCompatibility() {
+        return Version.CURRENT.minimumIndexCompatibilityVersion().onOrAfter(this.minimumSupportedVersion);
     }
 
     @Override
@@ -259,7 +266,8 @@ public class ReadOnlyEngine extends Engine {
                     translogDeletionPolicy,
                     config.getGlobalCheckpointSupplier(),
                     config.getPrimaryTermSupplier(),
-                    seqNo -> {}
+                    seqNo -> {},
+                    config.getStartedPrimarySupplier()
                 )
         ) {
             return translog.stats();

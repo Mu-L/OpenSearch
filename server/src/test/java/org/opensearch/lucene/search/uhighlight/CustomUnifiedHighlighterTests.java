@@ -63,15 +63,15 @@ import org.apache.lucene.search.uhighlight.Snippet;
 import org.apache.lucene.search.uhighlight.UnifiedHighlighter;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.tests.index.RandomIndexWriter;
-import org.opensearch.common.Strings;
 import org.opensearch.common.lucene.search.MultiPhrasePrefixQuery;
+import org.opensearch.core.common.Strings;
 import org.opensearch.test.OpenSearchTestCase;
 
 import java.text.BreakIterator;
 import java.util.Locale;
 
-import static org.apache.lucene.search.uhighlight.CustomUnifiedHighlighter.MULTIVAL_SEP_CHAR;
 import static org.hamcrest.CoreMatchers.equalTo;
+import static org.apache.lucene.search.uhighlight.CustomUnifiedHighlighter.MULTIVAL_SEP_CHAR;
 
 public class CustomUnifiedHighlighterTests extends OpenSearchTestCase {
     private void assertHighlightOneDoc(
@@ -102,7 +102,7 @@ public class CustomUnifiedHighlighterTests extends OpenSearchTestCase {
                 IndexSearcher searcher = newSearcher(reader);
                 iw.close();
                 TopDocs topDocs = searcher.search(new MatchAllDocsQuery(), 1, Sort.INDEXORDER);
-                assertThat(topDocs.totalHits.value, equalTo(1L));
+                assertThat(topDocs.totalHits.value(), equalTo(1L));
                 String rawValue = Strings.arrayToDelimitedString(inputs, String.valueOf(MULTIVAL_SEP_CHAR));
                 CustomUnifiedHighlighter highlighter = new CustomUnifiedHighlighter(
                     searcher,

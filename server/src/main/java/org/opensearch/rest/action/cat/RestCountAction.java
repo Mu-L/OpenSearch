@@ -37,8 +37,8 @@ import org.opensearch.OpenSearchException;
 import org.opensearch.action.search.SearchRequest;
 import org.opensearch.action.search.SearchResponse;
 import org.opensearch.client.node.NodeClient;
-import org.opensearch.common.Strings;
 import org.opensearch.common.Table;
+import org.opensearch.core.common.Strings;
 import org.opensearch.index.query.QueryBuilder;
 import org.opensearch.rest.RestRequest;
 import org.opensearch.rest.RestResponse;
@@ -99,7 +99,7 @@ public class RestCountAction extends AbstractCatAction {
         return channel -> client.search(countRequest, new RestResponseListener<SearchResponse>(channel) {
             @Override
             public RestResponse buildResponse(SearchResponse countResponse) throws Exception {
-                assert countResponse.getHits().getTotalHits().relation == TotalHits.Relation.EQUAL_TO;
+                assert countResponse.getHits().getTotalHits().relation() == TotalHits.Relation.EQUAL_TO;
                 return RestTable.buildResponse(buildTable(request, countResponse), channel);
             }
         });
@@ -117,7 +117,7 @@ public class RestCountAction extends AbstractCatAction {
     private Table buildTable(RestRequest request, SearchResponse response) {
         Table table = getTableWithHeader(request);
         table.startRow();
-        table.addCell(response.getHits().getTotalHits().value);
+        table.addCell(response.getHits().getTotalHits().value());
         table.endRow();
 
         return table;

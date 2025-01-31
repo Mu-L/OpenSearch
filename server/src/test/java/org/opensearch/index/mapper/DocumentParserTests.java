@@ -36,12 +36,11 @@ import org.apache.lucene.index.IndexableField;
 import org.apache.lucene.util.BytesRef;
 import org.opensearch.Version;
 import org.opensearch.cluster.metadata.IndexMetadata;
-import org.opensearch.common.Strings;
-import org.opensearch.common.bytes.BytesArray;
-import org.opensearch.common.bytes.BytesReference;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.xcontent.XContentFactory;
-import org.opensearch.common.xcontent.XContentType;
+import org.opensearch.core.common.bytes.BytesArray;
+import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
 import org.opensearch.index.IndexSettings;
 import org.opensearch.index.mapper.ParseContext.Document;
 import org.opensearch.plugins.Plugin;
@@ -879,6 +878,340 @@ public class DocumentParserTests extends MapperServiceTestCase {
         assertEquals("mapping set to strict, dynamic introduction of [foo] within [_doc] is not allowed", exception.getMessage());
     }
 
+    public void testDynamicStrictAllowTemplatesDottedFieldNameLong() throws Exception {
+        DocumentMapper documentMapper = createDocumentMapper(topMapping(b -> b.field("dynamic", "strict_allow_templates")));
+        StrictDynamicMappingException exception = expectThrows(
+            StrictDynamicMappingException.class,
+            () -> documentMapper.parse(source(b -> b.field("foo.bar.baz", 0)))
+        );
+        assertEquals(
+            "mapping set to strict_allow_templates, dynamic introduction of [foo] within [_doc] is not allowed",
+            exception.getMessage()
+        );
+
+        DocumentMapper documentMapperWithDynamicTemplates = createDocumentMapper(topMapping(b -> {
+            b.field("dynamic", "strict_allow_templates");
+            b.startArray("dynamic_templates");
+            {
+                b.startObject();
+                {
+                    b.startObject("test");
+                    {
+                        b.field("path_match", "foo.bar.baz");
+                        b.startObject("mapping").field("type", "long").endObject();
+                    }
+                    b.endObject();
+                }
+                b.endObject();
+            }
+            b.endArray();
+        }));
+        exception = expectThrows(
+            StrictDynamicMappingException.class,
+            () -> documentMapperWithDynamicTemplates.parse(source(b -> b.field("foo.bar.baz", 0)))
+        );
+        assertEquals(
+            "mapping set to strict_allow_templates, dynamic introduction of [foo] within [_doc] is not allowed",
+            exception.getMessage()
+        );
+
+        DocumentMapper mapper = createDocumentMapper(topMapping(b -> {
+            b.field("dynamic", "strict_allow_templates");
+            b.startArray("dynamic_templates");
+            {
+                b.startObject();
+                {
+                    b.startObject("test");
+                    {
+                        b.field("match", "foo");
+                        b.field("match_mapping_type", "object");
+                        b.startObject("mapping").field("type", "object").endObject();
+                    }
+                    b.endObject();
+                }
+                b.endObject();
+            }
+            {
+                b.startObject();
+                {
+                    b.startObject("test1");
+                    {
+                        b.field("match", "bar");
+                        b.field("match_mapping_type", "object");
+                        b.startObject("mapping").field("type", "object").endObject();
+                    }
+                    b.endObject();
+                }
+                b.endObject();
+            }
+            {
+                b.startObject();
+                {
+                    b.startObject("test2");
+                    {
+                        b.field("path_match", "foo.bar.baz");
+                        b.startObject("mapping").field("type", "long").endObject();
+                    }
+                    b.endObject();
+                }
+                b.endObject();
+            }
+            b.endArray();
+        }));
+
+        ParsedDocument doc = mapper.parse(source(b -> b.field("foo.bar.baz", 0)));
+        assertEquals(2, doc.rootDoc().getFields("foo.bar.baz").length);
+    }
+
+    public void testDynamicAllowTemplatesStrictLongArray() throws Exception {
+        DocumentMapper documentMapper = createDocumentMapper(topMapping(b -> b.field("dynamic", "strict_allow_templates")));
+        StrictDynamicMappingException exception = expectThrows(
+            StrictDynamicMappingException.class,
+            () -> documentMapper.parse(source(b -> b.startArray("foo").value(0).value(1).endArray()))
+        );
+        assertEquals(
+            "mapping set to strict_allow_templates, dynamic introduction of [foo] within [_doc] is not allowed",
+            exception.getMessage()
+        );
+
+        DocumentMapper documentMapperWithDynamicTemplates = createDocumentMapper(topMapping(b -> {
+            b.field("dynamic", "strict_allow_templates");
+            b.startArray("dynamic_templates");
+            {
+                b.startObject();
+                {
+                    b.startObject("test");
+                    {
+                        b.field("match", "test");
+                        b.startObject("mapping").field("type", "long").endObject();
+                    }
+                    b.endObject();
+                }
+                b.endObject();
+            }
+            b.endArray();
+        }));
+        exception = expectThrows(
+            StrictDynamicMappingException.class,
+            () -> documentMapperWithDynamicTemplates.parse(source(b -> b.startArray("foo").value(0).value(1).endArray()))
+        );
+        assertEquals(
+            "mapping set to strict_allow_templates, dynamic introduction of [foo] within [_doc] is not allowed",
+            exception.getMessage()
+        );
+
+        DocumentMapper mapper = createDocumentMapper(topMapping(b -> {
+            b.field("dynamic", "strict_allow_templates");
+            b.startArray("dynamic_templates");
+            {
+                b.startObject();
+                {
+                    b.startObject("test");
+                    {
+                        b.field("match", "foo");
+                        b.startObject("mapping").field("type", "long").endObject();
+                    }
+                    b.endObject();
+                }
+                b.endObject();
+            }
+            b.endArray();
+        }));
+
+        ParsedDocument doc = mapper.parse(source(b -> b.startArray("foo").value(0).value(1).endArray()));
+        assertEquals(4, doc.rootDoc().getFields("foo").length);
+    }
+
+    public void testDynamicStrictAllowTemplatesDottedFieldNameObject() throws Exception {
+        DocumentMapper documentMapper = createDocumentMapper(topMapping(b -> b.field("dynamic", "strict_allow_templates")));
+        StrictDynamicMappingException exception = expectThrows(
+            StrictDynamicMappingException.class,
+            () -> documentMapper.parse(source(b -> b.startObject("foo.bar.baz").field("a", 0).endObject()))
+        );
+        assertEquals(
+            "mapping set to strict_allow_templates, dynamic introduction of [foo] within [_doc] is not allowed",
+            exception.getMessage()
+        );
+
+        DocumentMapper documentMapperWithDynamicTemplates = createDocumentMapper(topMapping(b -> {
+            b.field("dynamic", "strict_allow_templates");
+            b.startArray("dynamic_templates");
+            {
+                b.startObject();
+                {
+                    b.startObject("test");
+                    {
+                        b.field("match", "test");
+                        b.startObject("mapping").field("type", "long").endObject();
+                    }
+                    b.endObject();
+                }
+                b.endObject();
+            }
+            b.endArray();
+        }));
+        exception = expectThrows(
+            StrictDynamicMappingException.class,
+            () -> documentMapperWithDynamicTemplates.parse(source(b -> b.startObject("foo.bar.baz").field("a", 0).endObject()))
+        );
+        assertEquals(
+            "mapping set to strict_allow_templates, dynamic introduction of [foo] within [_doc] is not allowed",
+            exception.getMessage()
+        );
+
+        DocumentMapper mapper = createDocumentMapper(topMapping(b -> {
+            b.field("dynamic", "strict_allow_templates");
+            b.startArray("dynamic_templates");
+            {
+                b.startObject();
+                {
+                    b.startObject("test");
+                    {
+                        b.field("match", "foo");
+                        b.field("match_mapping_type", "object");
+                        b.startObject("mapping").field("type", "object").endObject();
+                    }
+                    b.endObject();
+                }
+                b.endObject();
+            }
+            {
+                b.startObject();
+                {
+                    b.startObject("test1");
+                    {
+                        b.field("match", "bar");
+                        b.field("match_mapping_type", "object");
+                        b.startObject("mapping").field("type", "object").endObject();
+                    }
+                    b.endObject();
+                }
+                b.endObject();
+            }
+            {
+                b.startObject();
+                {
+                    b.startObject("test2");
+                    {
+                        b.field("match", "baz");
+                        b.field("match_mapping_type", "object");
+                        b.startObject("mapping").field("type", "object").endObject();
+                    }
+                    b.endObject();
+                }
+                b.endObject();
+            }
+            {
+                b.startObject();
+                {
+                    b.startObject("test3");
+                    {
+                        b.field("path_match", "foo.bar.baz.a");
+                        b.startObject("mapping").field("type", "long").endObject();
+                    }
+                    b.endObject();
+                }
+                b.endObject();
+            }
+            b.endArray();
+        }));
+
+        ParsedDocument doc = mapper.parse(source(b -> b.startObject("foo.bar.baz").field("a", 0).endObject()));
+        assertEquals(2, doc.rootDoc().getFields("foo.bar.baz.a").length);
+    }
+
+    public void testDynamicStrictAllowTemplatesObject() throws Exception {
+        DocumentMapper mapper = createDocumentMapper(topMapping(b -> {
+            b.field("dynamic", "strict_allow_templates");
+            b.startArray("dynamic_templates");
+            {
+                b.startObject();
+                {
+                    b.startObject("test");
+                    {
+                        b.field("match", "test");
+                        b.field("match_mapping_type", "object");
+                        b.startObject("mapping").field("type", "object").endObject();
+                    }
+                    b.endObject();
+                }
+                b.endObject();
+            }
+            {
+                b.startObject();
+                {
+                    b.startObject("test1");
+                    {
+                        b.field("match", "test1");
+                        b.startObject("mapping").field("type", "keyword").endObject();
+                    }
+                    b.endObject();
+                }
+                b.endObject();
+            }
+            b.endArray();
+        }
+
+        ));
+        StrictDynamicMappingException exception = expectThrows(
+            StrictDynamicMappingException.class,
+            () -> mapper.parse(source(b -> b.startObject("foo").field("bar", "baz").endObject()))
+        );
+        assertEquals(
+            "mapping set to strict_allow_templates, dynamic introduction of [foo] within [_doc] is not allowed",
+            exception.getMessage()
+        );
+
+        ParsedDocument doc = mapper.parse(source(b -> b.startObject("test").field("test1", "baz").endObject()));
+        assertEquals(2, doc.rootDoc().getFields("test.test1").length);
+    }
+
+    public void testDynamicStrictAllowTemplatesValue() throws Exception {
+        DocumentMapper mapper = createDocumentMapper(topMapping(b -> {
+            b.field("dynamic", "strict_allow_templates");
+            b.startArray("dynamic_templates");
+            {
+                b.startObject();
+                {
+                    b.startObject("test");
+                    {
+                        b.field("match", "test*");
+                        b.field("match_mapping_type", "string");
+                        b.startObject("mapping").field("type", "keyword").endObject();
+                    }
+                    b.endObject();
+                }
+                b.endObject();
+            }
+            b.endArray();
+        }
+
+        ));
+        StrictDynamicMappingException exception = expectThrows(
+            StrictDynamicMappingException.class,
+            () -> mapper.parse(source(b -> b.field("bar", "baz")))
+        );
+        assertEquals(
+            "mapping set to strict_allow_templates, dynamic introduction of [bar] within [_doc] is not allowed",
+            exception.getMessage()
+        );
+
+        ParsedDocument doc = mapper.parse(source(b -> b.field("test1", "baz")));
+        assertEquals(2, doc.rootDoc().getFields("test1").length);
+    }
+
+    public void testDynamicStrictAllowTemplatesNull() throws Exception {
+        DocumentMapper mapper = createDocumentMapper(topMapping(b -> b.field("dynamic", "strict_allow_templates")));
+        StrictDynamicMappingException exception = expectThrows(
+            StrictDynamicMappingException.class,
+            () -> mapper.parse(source(b -> b.nullField("bar")))
+        );
+        assertEquals(
+            "mapping set to strict_allow_templates, dynamic introduction of [bar] within [_doc] is not allowed",
+            exception.getMessage()
+        );
+    }
+
     public void testDynamicDottedFieldNameObject() throws Exception {
         DocumentMapper mapper = createDocumentMapper(mapping(b -> {}));
         ParsedDocument doc = mapper.parse(source(b -> b.startObject("foo.bar.baz").field("a", 0).endObject()));
@@ -1063,7 +1396,7 @@ public class DocumentParserTests extends MapperServiceTestCase {
         // reparse it
         DocumentMapper builtDocMapper = createDocumentMapper(MapperService.SINGLE_MAPPING_NAME, builtMapping);
         BytesReference json = new BytesArray(copyToBytesFromClasspath("/org/opensearch/index/mapper/simple/test1.json"));
-        Document doc = builtDocMapper.parse(new SourceToParse("test", "1", json, XContentType.JSON)).rootDoc();
+        Document doc = builtDocMapper.parse(new SourceToParse("test", "1", json, MediaTypeRegistry.JSON)).rootDoc();
         assertThat(doc.getBinaryValue(builtDocMapper.idFieldMapper().name()), equalTo(Uid.encodeId("1")));
         assertThat(doc.get(builtDocMapper.mappers().getMapper("name.first").name()), equalTo("fred"));
     }
@@ -1075,7 +1408,7 @@ public class DocumentParserTests extends MapperServiceTestCase {
         assertThat((String) docMapper.meta().get("param1"), equalTo("value1"));
 
         BytesReference json = new BytesArray(copyToBytesFromClasspath("/org/opensearch/index/mapper/simple/test1.json"));
-        Document doc = docMapper.parse(new SourceToParse("test", "1", json, XContentType.JSON)).rootDoc();
+        Document doc = docMapper.parse(new SourceToParse("test", "1", json, MediaTypeRegistry.JSON)).rootDoc();
         assertThat(doc.getBinaryValue(docMapper.idFieldMapper().name()), equalTo(Uid.encodeId("1")));
         assertThat(doc.get(docMapper.mappers().getMapper("name.first").name()), equalTo("fred"));
     }
@@ -1084,7 +1417,7 @@ public class DocumentParserTests extends MapperServiceTestCase {
         String mapping = copyToStringFromClasspath("/org/opensearch/index/mapper/simple/test-mapping.json");
         DocumentMapper docMapper = createDocumentMapper(MapperService.SINGLE_MAPPING_NAME, mapping);
         BytesReference json = new BytesArray(copyToBytesFromClasspath("/org/opensearch/index/mapper/simple/test1-notype-noid.json"));
-        Document doc = docMapper.parse(new SourceToParse("test", "1", json, XContentType.JSON)).rootDoc();
+        Document doc = docMapper.parse(new SourceToParse("test", "1", json, MediaTypeRegistry.JSON)).rootDoc();
         assertThat(doc.getBinaryValue(docMapper.idFieldMapper().name()), equalTo(Uid.encodeId("1")));
         assertThat(doc.get(docMapper.mappers().getMapper("name.first").name()), equalTo("fred"));
     }
@@ -1106,7 +1439,7 @@ public class DocumentParserTests extends MapperServiceTestCase {
         BytesReference json = new BytesArray("".getBytes(StandardCharsets.UTF_8));
         MapperParsingException e = expectThrows(
             MapperParsingException.class,
-            () -> docMapper.parse(new SourceToParse("test", "1", json, XContentType.JSON))
+            () -> docMapper.parse(new SourceToParse("test", "1", json, MediaTypeRegistry.JSON))
         );
         assertThat(e.getMessage(), equalTo("failed to parse, document is empty"));
     }
@@ -1367,6 +1700,38 @@ public class DocumentParserTests extends MapperServiceTestCase {
         );
     }
 
+    public void testDynamicFieldsWithOnlyDot() throws Exception {
+        DocumentMapper mapper = createDocumentMapper(mapping(b -> {}));
+
+        MapperParsingException e = expectThrows(MapperParsingException.class, () -> mapper.parse(source(b -> {
+            b.startArray("top");
+            {
+                b.startObject();
+                {
+                    b.startObject("inner").field(".", 2).endObject();
+                }
+                b.endObject();
+            }
+            b.endArray();
+        })));
+
+        assertThat(e.getCause(), notNullValue());
+        assertThat(e.getCause().getMessage(), containsString("field name cannot contain only the character [.]"));
+
+        e = expectThrows(
+            MapperParsingException.class,
+            () -> mapper.parse(source(b -> { b.startObject("..").field("foo", 2).endObject(); }))
+        );
+
+        assertThat(e.getCause(), notNullValue());
+        assertThat(e.getCause().getMessage(), containsString("field name cannot contain only the character [.]"));
+
+        e = expectThrows(MapperParsingException.class, () -> mapper.parse(source(b -> b.field(".", "1234"))));
+
+        assertThat(e.getCause(), notNullValue());
+        assertThat(e.getCause().getMessage(), containsString("field name cannot contain only the character [.]"));
+    }
+
     public void testDynamicFieldsEmptyName() throws Exception {
 
         DocumentMapper mapper = createDocumentMapper(mapping(b -> {}));
@@ -1469,21 +1834,172 @@ public class DocumentParserTests extends MapperServiceTestCase {
     }
 
     public void testTypeless() throws IOException {
-        String mapping = Strings.toString(
-            XContentFactory.jsonBuilder()
-                .startObject()
-                .startObject(MapperService.SINGLE_MAPPING_NAME)
-                .startObject("properties")
-                .startObject("foo")
-                .field("type", "keyword")
-                .endObject()
-                .endObject()
-                .endObject()
-                .endObject()
-        );
+        String mapping = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject(MapperService.SINGLE_MAPPING_NAME)
+            .startObject("properties")
+            .startObject("foo")
+            .field("type", "keyword")
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .toString();
         DocumentMapper mapper = createDocumentMapper(MapperService.SINGLE_MAPPING_NAME, mapping);
 
         ParsedDocument doc = mapper.parse(source(b -> b.field("foo", "1234")));
         assertNull(doc.dynamicMappingsUpdate()); // no update since we reused the existing type
     }
+
+    public void testDocumentContainsDeepNestedFieldParsing() throws Exception {
+        DocumentMapper mapper = createDocumentMapper(mapping(b -> {}));
+        ParsedDocument doc = mapper.parse(source(b -> {
+            b.startObject("inner1");
+            {
+                b.field("inner1_field1", "inner1_value1");
+                b.startObject("inner2");
+                {
+                    b.startObject("inner3");
+                    {
+                        b.field("inner3_field1", "inner3_value1");
+                        b.field("inner3_field2", "inner3_value2");
+                    }
+                    b.endObject();
+                }
+                b.endObject();
+            }
+            b.endObject();
+        }));
+
+        Mapping update = doc.dynamicMappingsUpdate();
+        assertNotNull(update); // dynamic mapping update
+
+        Mapper objMapper = update.root().getMapper("inner1");
+        Mapper inner1_field1_mapper = ((ObjectMapper) objMapper).getMapper("inner1_field1");
+        assertNotNull(inner1_field1_mapper);
+        Mapper inner2_mapper = ((ObjectMapper) objMapper).getMapper("inner2");
+        assertNotNull(inner2_mapper);
+        Mapper inner3_mapper = ((ObjectMapper) inner2_mapper).getMapper("inner3");
+        assertNotNull(inner3_mapper);
+        assertThat(doc.rootDoc().get("inner1.inner2.inner3.inner3_field1"), equalTo("inner3_value1"));
+    }
+
+    public void testDocumentContainsDeepNestedFieldParsingFail() throws Exception {
+        DocumentMapper mapper = createDocumentMapper(mapping(b -> {}));
+        long depth_limit = MapperService.INDEX_MAPPING_DEPTH_LIMIT_SETTING.getDefault(Settings.EMPTY);
+        MapperParsingException e = expectThrows(MapperParsingException.class, () -> mapper.parse(source(b -> {
+            for (int i = 1; i <= depth_limit; i++) {
+                b.startObject("inner" + i);
+            }
+            b.field("inner_field", "inner_value");
+            for (int i = 1; i <= depth_limit; i++) {
+                b.endObject();
+            }
+        })));
+
+        // check that parsing succeeds with valid doc
+        // after throwing exception
+        ParsedDocument doc = mapper.parse(source(b -> {
+            b.startObject("inner1");
+            {
+                b.startObject("inner2");
+                {
+                    b.startObject("inner3");
+                    {
+                        b.field("inner3_field1", "inner3_value1");
+                    }
+                    b.endObject();
+                }
+                b.endObject();
+            }
+            b.endObject();
+        }));
+
+        Mapping update = doc.dynamicMappingsUpdate();
+        assertNotNull(update); // dynamic mapping update
+        Mapper objMapper = update.root().getMapper("inner1");
+        Mapper inner2_mapper = ((ObjectMapper) objMapper).getMapper("inner2");
+        assertNotNull(inner2_mapper);
+        Mapper inner3_mapper = ((ObjectMapper) inner2_mapper).getMapper("inner3");
+        assertNotNull(inner3_mapper);
+        assertThat(doc.rootDoc().get("inner1.inner2.inner3.inner3_field1"), equalTo("inner3_value1"));
+    }
+
+    public void testDocumentContainsDeepNestedFieldParsingShouldFail() throws Exception {
+        DocumentMapper mapper = createDocumentMapper(fieldMapping(b -> { b.field("type", "nested"); }));
+        long depth_limit = MapperService.INDEX_MAPPING_DEPTH_LIMIT_SETTING.getDefault(Settings.EMPTY);
+        MapperParsingException e = expectThrows(MapperParsingException.class, () -> mapper.parse(source(b -> {
+            b.startObject("field");
+            b.startArray("inner");
+            for (int i = 1; i <= depth_limit; i++) {
+                b.startArray();
+            }
+            b.startArray().value(0).value(0).endArray();
+            for (int i = 1; i <= depth_limit; i++) {
+                b.endArray();
+            }
+            b.endArray();
+            b.endObject();
+        })));
+        // check parsing success for nested array within allowed depth limit
+        ParsedDocument doc = mapper.parse(source(b -> {
+            b.startObject("field");
+            b.startArray("inner");
+            for (int i = 1; i < depth_limit - 1; i++) {
+                b.startArray();
+            }
+            b.startArray().value(0).value(0).endArray();
+            for (int i = 1; i < depth_limit - 1; i++) {
+                b.endArray();
+            }
+            b.endArray();
+            b.endObject();
+        }
+
+        ));
+        Mapping update = doc.dynamicMappingsUpdate();
+        assertNotNull(update); // dynamic mapping update
+
+    }
+
+    // Test nesting upto max allowed depth with combination of nesting in object and array
+    // object -> array -> object -> array ....
+    public void testDocumentDeepNestedObjectAndArrayCombination() throws Exception {
+        DocumentMapper mapper = createDocumentMapper(mapping(b -> {}));
+        long depth_limit = MapperService.INDEX_MAPPING_DEPTH_LIMIT_SETTING.getDefault(Settings.EMPTY);
+        MapperParsingException e = expectThrows(MapperParsingException.class, () -> mapper.parse(source(b -> {
+            for (int i = 1; i < depth_limit; i++) {
+                b.startArray("foo" + 1);
+                b.startObject();
+            }
+            b.startArray("bar");
+            b.startArray().value(0).value(0).endArray();
+            b.endArray();
+            for (int i = 1; i < depth_limit; i++) {
+                b.endObject();
+                b.endArray();
+            }
+        })));
+
+        // check parsing success for nested array within allowed depth limit
+        ParsedDocument doc = mapper.parse(source(b -> {
+            for (int i = 1; i < depth_limit - 1; i++) {
+                b.startArray("foo" + 1);
+                b.startObject();
+            }
+            b.startArray("bar");
+            b.startArray().value(0).value(0).endArray();
+            b.endArray();
+            for (int i = 1; i < depth_limit - 1; i++) {
+                b.endObject();
+                b.endArray();
+            }
+        }
+
+        ));
+        Mapping update = doc.dynamicMappingsUpdate();
+        assertNotNull(update); // dynamic mapping update
+
+    }
+
 }

@@ -41,13 +41,14 @@ import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.node.DiscoveryNodeRole;
 import org.opensearch.cluster.node.DiscoveryNodes;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.transport.TransportAddress;
+import org.opensearch.core.common.transport.TransportAddress;
 import org.opensearch.gateway.GatewayMetaState;
 import org.opensearch.monitor.StatusInfo;
 import org.opensearch.test.OpenSearchTestCase;
 
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
@@ -288,7 +289,7 @@ public class ClusterFormationFailureHelperTests extends OpenSearchTestCase {
             "local",
             buildNewFakeTransportAddress(),
             emptyMap(),
-            org.opensearch.common.collect.Set.of(DiscoveryNodeRole.CLUSTER_MANAGER_ROLE),
+            Set.of(DiscoveryNodeRole.CLUSTER_MANAGER_ROLE),
             Version.CURRENT
         );
         clusterState = ClusterState.builder(ClusterName.DEFAULT)

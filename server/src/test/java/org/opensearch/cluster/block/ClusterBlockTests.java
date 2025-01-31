@@ -34,15 +34,15 @@ package org.opensearch.cluster.block;
 
 import org.opensearch.Version;
 import org.opensearch.common.UUIDs;
-import org.opensearch.common.collect.ImmutableOpenMap;
 import org.opensearch.common.io.stream.BytesStreamOutput;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.rest.RestStatus;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.rest.RestStatus;
 import org.opensearch.test.OpenSearchTestCase;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import static java.util.EnumSet.copyOf;
 import static org.opensearch.test.VersionUtils.randomVersion;
@@ -80,7 +80,7 @@ public class ClusterBlockTests extends OpenSearchTestCase {
 
     public void testGlobalBlocksCheckedIfNoIndicesSpecified() {
         ClusterBlock globalBlock = randomClusterBlock();
-        ClusterBlocks clusterBlocks = new ClusterBlocks(Collections.singleton(globalBlock), ImmutableOpenMap.of());
+        ClusterBlocks clusterBlocks = new ClusterBlocks(Collections.singleton(globalBlock), Map.of());
         ClusterBlockException exception = clusterBlocks.indicesBlockedException(randomFrom(globalBlock.levels()), new String[0]);
         assertNotNull(exception);
         assertEquals(exception.blocks(), Collections.singleton(globalBlock));
@@ -136,7 +136,7 @@ public class ClusterBlockTests extends OpenSearchTestCase {
         assertThat(builder.build().getIndexBlockWithId("index", randomValueOtherThan(blockId, OpenSearchTestCase::randomInt)), nullValue());
     }
 
-    private ClusterBlock randomClusterBlock() {
+    public static ClusterBlock randomClusterBlock() {
         final String uuid = randomBoolean() ? UUIDs.randomBase64UUID() : null;
         final List<ClusterBlockLevel> levels = Arrays.asList(ClusterBlockLevel.values());
         return new ClusterBlock(

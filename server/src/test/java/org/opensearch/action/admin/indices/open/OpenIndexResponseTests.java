@@ -32,11 +32,17 @@
 
 package org.opensearch.action.admin.indices.open;
 
-import org.opensearch.common.io.stream.Writeable;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.test.AbstractSerializingTestCase;
 
 public class OpenIndexResponseTests extends AbstractSerializingTestCase<OpenIndexResponse> {
+
+    public void testToString() {
+        OpenIndexResponse response = new OpenIndexResponse(true, false);
+        String output = response.toString();
+        assertEquals("OpenIndexResponse[acknowledged=true,shards_acknowledged=false]", output);
+    }
 
     @Override
     protected OpenIndexResponse doParseInstance(XContentParser parser) {

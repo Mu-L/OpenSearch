@@ -34,19 +34,19 @@ package org.opensearch.index.query;
 
 import org.apache.lucene.search.MatchNoDocsQuery;
 import org.apache.lucene.search.Query;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.ParsingException;
-import org.opensearch.common.Strings;
 import org.opensearch.common.geo.GeoDistance;
 import org.opensearch.common.geo.GeoPoint;
 import org.opensearch.common.geo.GeoUtils;
 import org.opensearch.common.geo.ShapeRelation;
 import org.opensearch.common.geo.SpatialStrategy;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
 import org.opensearch.common.unit.DistanceUnit;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.ParsingException;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.geometry.Circle;
 import org.opensearch.index.mapper.GeoPointFieldMapper;
 import org.opensearch.index.mapper.GeoShapeFieldMapper;
@@ -63,7 +63,7 @@ import java.util.Objects;
  *
  * @opensearch.internal
  */
-public class GeoDistanceQueryBuilder extends AbstractQueryBuilder<GeoDistanceQueryBuilder> {
+public class GeoDistanceQueryBuilder extends AbstractQueryBuilder<GeoDistanceQueryBuilder> implements WithFieldName {
     public static final String NAME = "geo_distance";
 
     /** Default for distance unit computation. */
@@ -113,7 +113,7 @@ public class GeoDistanceQueryBuilder extends AbstractQueryBuilder<GeoDistanceQue
         fieldName = in.readString();
         distance = in.readDouble();
         validationMethod = GeoValidationMethod.readFromStream(in);
-        center = in.readGeoPoint();
+        center = new GeoPoint(in);
         geoDistance = GeoDistance.readFromStream(in);
         ignoreUnmapped = in.readBoolean();
     }
@@ -123,12 +123,13 @@ public class GeoDistanceQueryBuilder extends AbstractQueryBuilder<GeoDistanceQue
         out.writeString(fieldName);
         out.writeDouble(distance);
         validationMethod.writeTo(out);
-        out.writeGeoPoint(center);
+        center.writeTo(out);
         geoDistance.writeTo(out);
         out.writeBoolean(ignoreUnmapped);
     }
 
     /** Name of the field this query is operating on. */
+    @Override
     public String fieldName() {
         return this.fieldName;
     }

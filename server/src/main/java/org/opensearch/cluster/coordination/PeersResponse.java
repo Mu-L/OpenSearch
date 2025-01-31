@@ -33,9 +33,9 @@
 package org.opensearch.cluster.coordination;
 
 import org.opensearch.cluster.node.DiscoveryNode;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.transport.TransportResponse;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.transport.TransportResponse;
 
 import java.io.IOException;
 import java.util.List;
@@ -78,15 +78,6 @@ public class PeersResponse extends TransportResponse {
      */
     public Optional<DiscoveryNode> getClusterManagerNode() {
         return clusterManagerNode;
-    }
-
-    /**
-     * @return the node that is currently leading, according to the responding node.
-     * @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #getClusterManagerNode()}
-     */
-    @Deprecated
-    public Optional<DiscoveryNode> getMasterNode() {
-        return getClusterManagerNode();
     }
 
     /**

@@ -32,8 +32,8 @@
 
 package org.opensearch.search.aggregations.pipeline;
 
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.search.aggregations.AggregationExecutionException;
 import org.opensearch.search.aggregations.Aggregations;
 import org.opensearch.search.aggregations.InternalMultiBucketAggregation;

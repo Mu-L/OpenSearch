@@ -8,19 +8,13 @@
 
 package org.opensearch.cluster.decommission;
 
-import org.hamcrest.MatcherAssert;
-import org.junit.After;
-import org.junit.Before;
 import org.opensearch.OpenSearchTimeoutException;
 import org.opensearch.Version;
-import org.opensearch.action.ActionListener;
 import org.opensearch.action.admin.cluster.configuration.TransportAddVotingConfigExclusionsAction;
 import org.opensearch.action.admin.cluster.configuration.TransportClearVotingConfigExclusionsAction;
 import org.opensearch.action.support.ActionFilters;
 import org.opensearch.cluster.ClusterName;
 import org.opensearch.cluster.ClusterState;
-import org.opensearch.cluster.ClusterStateObserver;
-import org.opensearch.cluster.ClusterStateUpdateTask;
 import org.opensearch.cluster.coordination.CoordinationMetadata;
 import org.opensearch.cluster.metadata.IndexNameExpressionResolver;
 import org.opensearch.cluster.metadata.Metadata;
@@ -33,15 +27,21 @@ import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.common.util.concurrent.ThreadContext;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.telemetry.tracing.noop.NoopTracer;
 import org.opensearch.test.OpenSearchTestCase;
 import org.opensearch.test.transport.MockTransport;
 import org.opensearch.threadpool.TestThreadPool;
 import org.opensearch.threadpool.ThreadPool;
 import org.opensearch.transport.TransportService;
+import org.hamcrest.MatcherAssert;
+import org.junit.After;
+import org.junit.Before;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -52,14 +52,13 @@ import java.util.stream.StreamSupport;
 
 import static java.util.Collections.emptySet;
 import static java.util.Collections.singletonMap;
-import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.instanceOf;
-import static org.hamcrest.Matchers.notNullValue;
-import static org.hamcrest.Matchers.sameInstance;
 import static org.opensearch.cluster.ClusterState.builder;
 import static org.opensearch.cluster.OpenSearchAllocationTestCase.createAllocationService;
 import static org.opensearch.test.ClusterServiceUtils.createClusterService;
 import static org.opensearch.test.ClusterServiceUtils.setState;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.instanceOf;
+import static org.hamcrest.Matchers.notNullValue;
 
 public class DecommissionControllerTests extends OpenSearchTestCase {
 
@@ -93,7 +92,8 @@ public class DecommissionControllerTests extends OpenSearchTestCase {
             TransportService.NOOP_TRANSPORT_INTERCEPTOR,
             boundTransportAddress -> clusterService.state().nodes().get("node1"),
             null,
-            emptySet()
+            emptySet(),
+            NoopTracer.INSTANCE
         );
 
         final Settings.Builder nodeSettingsBuilder = Settings.builder();
@@ -237,7 +237,8 @@ public class DecommissionControllerTests extends OpenSearchTestCase {
         final CountDownLatch countDownLatch = new CountDownLatch(1);
         DecommissionAttributeMetadata oldMetadata = new DecommissionAttributeMetadata(
             new DecommissionAttribute("zone", "zone-1"),
-            currentStatus
+            currentStatus,
+            randomAlphaOfLength(10)
         );
         ClusterState state = clusterService.state();
         Metadata metadata = state.metadata();
@@ -265,63 +266,9 @@ public class DecommissionControllerTests extends OpenSearchTestCase {
         assertEquals(decommissionAttributeMetadata.status(), newStatus);
     }
 
-    private static class AdjustConfigurationForExclusions implements ClusterStateObserver.Listener {
-
-        final CountDownLatch doneLatch;
-
-        AdjustConfigurationForExclusions(CountDownLatch latch) {
-            this.doneLatch = latch;
-        }
-
-        @Override
-        public void onNewClusterState(ClusterState state) {
-            clusterService.getClusterManagerService().submitStateUpdateTask("reconfiguration", new ClusterStateUpdateTask() {
-                @Override
-                public ClusterState execute(ClusterState currentState) {
-                    assertThat(currentState, sameInstance(state));
-                    final Set<String> votingNodeIds = new HashSet<>();
-                    currentState.nodes().forEach(n -> votingNodeIds.add(n.getId()));
-                    currentState.getVotingConfigExclusions().forEach(t -> votingNodeIds.remove(t.getNodeId()));
-                    final CoordinationMetadata.VotingConfiguration votingConfiguration = new CoordinationMetadata.VotingConfiguration(
-                        votingNodeIds
-                    );
-                    return builder(currentState).metadata(
-                        Metadata.builder(currentState.metadata())
-                            .coordinationMetadata(
-                                CoordinationMetadata.builder(currentState.coordinationMetadata())
-                                    .lastAcceptedConfiguration(votingConfiguration)
-                                    .lastCommittedConfiguration(votingConfiguration)
-                                    .build()
-                            )
-                    ).build();
-                }
-
-                @Override
-                public void onFailure(String source, Exception e) {
-                    throw new AssertionError("unexpected failure", e);
-                }
-
-                @Override
-                public void clusterStateProcessed(String source, ClusterState oldState, ClusterState newState) {
-                    doneLatch.countDown();
-                }
-            });
-        }
-
-        @Override
-        public void onClusterServiceClose() {
-            throw new AssertionError("unexpected close");
-        }
-
-        @Override
-        public void onTimeout(TimeValue timeout) {
-            throw new AssertionError("unexpected timeout");
-        }
-    }
-
     private ClusterState addNodes(ClusterState clusterState, String zone, String... nodeIds) {
         DiscoveryNodes.Builder nodeBuilder = DiscoveryNodes.builder(clusterState.nodes());
-        org.opensearch.common.collect.List.of(nodeIds).forEach(nodeId -> nodeBuilder.add(newNode(nodeId, singletonMap("zone", zone))));
+        List.of(nodeIds).forEach(nodeId -> nodeBuilder.add(newNode(nodeId, singletonMap("zone", zone))));
         clusterState = ClusterState.builder(clusterState).nodes(nodeBuilder).build();
         return clusterState;
     }

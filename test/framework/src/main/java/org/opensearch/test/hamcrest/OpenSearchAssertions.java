@@ -34,9 +34,8 @@ package org.opensearch.test.hamcrest;
 import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.TotalHits;
-import org.opensearch.OpenSearchException;
 import org.opensearch.ExceptionsHelper;
-import org.opensearch.action.ActionFuture;
+import org.opensearch.OpenSearchException;
 import org.opensearch.action.ActionRequestBuilder;
 import org.opensearch.action.admin.cluster.health.ClusterHealthRequestBuilder;
 import org.opensearch.action.admin.cluster.health.ClusterHealthResponse;
@@ -49,24 +48,25 @@ import org.opensearch.action.search.SearchPhaseExecutionException;
 import org.opensearch.action.search.SearchRequestBuilder;
 import org.opensearch.action.search.SearchResponse;
 import org.opensearch.action.search.ShardSearchFailure;
-import org.opensearch.action.support.DefaultShardOperationFailedException;
 import org.opensearch.action.support.broadcast.BroadcastResponse;
-import org.opensearch.action.support.master.AcknowledgedRequestBuilder;
-import org.opensearch.action.support.master.AcknowledgedResponse;
+import org.opensearch.action.support.clustermanager.AcknowledgedRequestBuilder;
+import org.opensearch.action.support.clustermanager.AcknowledgedResponse;
 import org.opensearch.cluster.block.ClusterBlock;
 import org.opensearch.cluster.block.ClusterBlockException;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.cluster.metadata.IndexTemplateMetadata;
 import org.opensearch.common.Nullable;
-import org.opensearch.common.bytes.BytesReference;
+import org.opensearch.common.action.ActionFuture;
 import org.opensearch.common.unit.TimeValue;
-import org.opensearch.common.xcontent.DeprecationHandler;
-import org.opensearch.common.xcontent.NamedXContentRegistry;
-import org.opensearch.common.xcontent.ToXContent;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
-import org.opensearch.common.xcontent.XContentType;
-import org.opensearch.rest.RestStatus;
+import org.opensearch.core.action.support.DefaultShardOperationFailedException;
+import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.rest.RestStatus;
+import org.opensearch.core.xcontent.DeprecationHandler;
+import org.opensearch.core.xcontent.MediaType;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
+import org.opensearch.core.xcontent.ToXContent;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.search.SearchHit;
 import org.opensearch.search.suggest.Suggest;
 import org.opensearch.test.NotEqualMessageBuilder;
@@ -89,8 +89,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
-import static org.apache.lucene.tests.util.LuceneTestCase.expectThrows;
-import static org.apache.lucene.tests.util.LuceneTestCase.expectThrowsAnyOf;
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -101,6 +99,8 @@ import static org.hamcrest.Matchers.hasKey;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.apache.lucene.tests.util.LuceneTestCase.expectThrows;
+import static org.apache.lucene.tests.util.LuceneTestCase.expectThrowsAnyOf;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -299,8 +299,26 @@ public class OpenSearchAssertions {
 
     public static void assertHitCount(SearchResponse countResponse, long expectedHitCount) {
         final TotalHits totalHits = countResponse.getHits().getTotalHits();
-        if (totalHits.relation != TotalHits.Relation.EQUAL_TO || totalHits.value != expectedHitCount) {
+        if (totalHits.relation() != TotalHits.Relation.EQUAL_TO || totalHits.value() != expectedHitCount) {
             fail("Count is " + totalHits + " but " + expectedHitCount + " was expected. " + formatShardStatus(countResponse));
+        }
+    }
+
+    public static void assertHitCount(SearchResponse countResponse, long minHitCount, long maxHitCount) {
+        final TotalHits totalHits = countResponse.getHits().getTotalHits();
+        if (!(totalHits.relation() == TotalHits.Relation.EQUAL_TO
+            && totalHits.value() >= minHitCount
+            && totalHits.value() <= maxHitCount)) {
+            fail(
+                "Count is "
+                    + totalHits
+                    + " not between "
+                    + minHitCount
+                    + " and "
+                    + maxHitCount
+                    + " inclusive. "
+                    + formatShardStatus(countResponse)
+            );
         }
     }
 
@@ -328,7 +346,7 @@ public class OpenSearchAssertions {
     public static void assertSearchHit(SearchResponse searchResponse, int number, Matcher<SearchHit> matcher) {
         assertThat(number, greaterThan(0));
         assertThat("SearchHit number must be greater than 0", number, greaterThan(0));
-        assertThat(searchResponse.getHits().getTotalHits().value, greaterThanOrEqualTo((long) number));
+        assertThat(searchResponse.getHits().getTotalHits().value(), greaterThanOrEqualTo((long) number));
         assertThat(searchResponse.getHits().getAt(number - 1), matcher);
     }
 
@@ -528,6 +546,10 @@ public class OpenSearchAssertions {
         return new OpenSearchMatchers.SearchHitHasScoreMatcher(score);
     }
 
+    public static Matcher<SearchHit> hasMatchedQueries(final String[] matchedQueries) {
+        return new OpenSearchMatchers.SearchHitMatchedQueriesMatcher(matchedQueries);
+    }
+
     public static <T, V> CombinableMatcher<T> hasProperty(Function<? super T, ? extends V> property, Matcher<V> valueMatcher) {
         return OpenSearchMatchers.HasPropertyLambdaMatcher.hasProperty(property, valueMatcher);
     }
@@ -540,8 +562,8 @@ public class OpenSearchAssertions {
         assertThat(query, instanceOf(BooleanQuery.class));
         BooleanQuery q = (BooleanQuery) query;
         assertThat(q.clauses().size(), greaterThan(i));
-        assertThat(q.clauses().get(i).getQuery(), instanceOf(subqueryType));
-        return subqueryType.cast(q.clauses().get(i).getQuery());
+        assertThat(q.clauses().get(i).query(), instanceOf(subqueryType));
+        return subqueryType.cast(q.clauses().get(i).query());
     }
 
     /**
@@ -602,7 +624,7 @@ public class OpenSearchAssertions {
      * Run future.actionGet() and check that it throws an exception of the right type, optionally checking the exception's rest status
      *
      * @param exceptionClass expected exception class
-     * @param status         {@link org.opensearch.rest.RestStatus} to check for. Can be null to disable the check
+     * @param status         {@link RestStatus} to check for. Can be null to disable the check
      * @param extraInfo      extra information to add to the failure message. Can be null.
      */
     public static <E extends Throwable> void assertFutureThrows(
@@ -683,12 +705,11 @@ public class OpenSearchAssertions {
 
     /**
      * Asserts that the provided {@link BytesReference}s created through
-     * {@link org.opensearch.common.xcontent.ToXContent#toXContent(XContentBuilder, ToXContent.Params)} hold the same content.
+     * {@link ToXContent#toXContent(XContentBuilder, ToXContent.Params)} hold the same content.
      * The comparison is done by parsing both into a map and comparing those two, so that keys ordering doesn't matter.
      * Also binary values (byte[]) are properly compared through arrays comparisons.
      */
-    public static void assertToXContentEquivalent(BytesReference expected, BytesReference actual, XContentType xContentType)
-        throws IOException {
+    public static void assertToXContentEquivalent(BytesReference expected, BytesReference actual, MediaType mediaType) throws IOException {
         // we tried comparing byte per byte, but that didn't fly for a couple of reasons:
         // 1) whenever anything goes through a map while parsing, ordering is not preserved, which is perfectly ok
         // 2) Jackson SMILE parser parses floats as double, which then get printed out as double (with double precision)
@@ -696,12 +717,12 @@ public class OpenSearchAssertions {
         Map<String, Object> actualMap = null;
         Map<String, Object> expectedMap = null;
         try (
-            XContentParser actualParser = xContentType.xContent()
+            XContentParser actualParser = mediaType.xContent()
                 .createParser(NamedXContentRegistry.EMPTY, DeprecationHandler.THROW_UNSUPPORTED_OPERATION, actual.streamInput())
         ) {
             actualMap = actualParser.map();
             try (
-                XContentParser expectedParser = xContentType.xContent()
+                XContentParser expectedParser = mediaType.xContent()
                     .createParser(NamedXContentRegistry.EMPTY, DeprecationHandler.THROW_UNSUPPORTED_OPERATION, expected.streamInput())
             ) {
                 expectedMap = expectedParser.map();

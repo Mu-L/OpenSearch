@@ -35,22 +35,21 @@ package org.opensearch.indices;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.lucene.index.LeafReaderContext;
-import org.apache.lucene.search.BulkScorer;
 import org.apache.lucene.search.Explanation;
 import org.apache.lucene.search.LRUQueryCache;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.QueryCache;
 import org.apache.lucene.search.QueryCachingPolicy;
-import org.apache.lucene.search.Scorer;
 import org.apache.lucene.search.ScorerSupplier;
 import org.apache.lucene.search.Weight;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.lucene.ShardCoreKeyMap;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Setting.Property;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.unit.ByteSizeValue;
+import org.opensearch.core.common.unit.ByteSizeValue;
+import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.index.cache.query.QueryCacheStats;
-import org.opensearch.index.shard.ShardId;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -65,8 +64,9 @@ import java.util.function.Predicate;
 /**
  * The query cache for indices
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class IndicesQueryCache implements QueryCache, Closeable {
 
     private static final Logger logger = LogManager.getLogger(IndicesQueryCache.class);
@@ -128,13 +128,17 @@ public class IndicesQueryCache implements QueryCache, Closeable {
 
         // We also have some shared ram usage that we try to distribute to
         // proportionally to their number of cache entries of each shard
-        long totalSize = 0;
-        for (QueryCacheStats s : stats.values()) {
-            totalSize += s.getCacheSize();
+        if (stats.isEmpty()) {
+            shardStats.add(new QueryCacheStats(sharedRamBytesUsed, 0, 0, 0, 0));
+        } else {
+            long totalSize = 0;
+            for (QueryCacheStats s : stats.values()) {
+                totalSize += s.getCacheSize();
+            }
+            final double weight = totalSize == 0 ? 1d / stats.size() : ((double) shardStats.getCacheSize()) / totalSize;
+            final long additionalRamBytesUsed = Math.round(weight * sharedRamBytesUsed);
+            shardStats.add(new QueryCacheStats(additionalRamBytesUsed, 0, 0, 0, 0));
         }
-        final double weight = totalSize == 0 ? 1d / stats.size() : ((double) shardStats.getCacheSize()) / totalSize;
-        final long additionalRamBytesUsed = Math.round(weight * sharedRamBytesUsed);
-        shardStats.add(new QueryCacheStats(additionalRamBytesUsed, 0, 0, 0, 0));
         return shardStats;
     }
 
@@ -165,21 +169,15 @@ public class IndicesQueryCache implements QueryCache, Closeable {
         }
 
         @Override
-        public Scorer scorer(LeafReaderContext context) throws IOException {
-            shardKeyMap.add(context.reader());
-            return in.scorer(context);
-        }
-
-        @Override
         public ScorerSupplier scorerSupplier(LeafReaderContext context) throws IOException {
             shardKeyMap.add(context.reader());
             return in.scorerSupplier(context);
         }
 
         @Override
-        public BulkScorer bulkScorer(LeafReaderContext context) throws IOException {
+        public int count(LeafReaderContext context) throws IOException {
             shardKeyMap.add(context.reader());
-            return in.bulkScorer(context);
+            return in.count(context);
         }
 
         @Override

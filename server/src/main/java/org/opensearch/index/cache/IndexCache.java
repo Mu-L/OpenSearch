@@ -32,7 +32,8 @@
 
 package org.opensearch.index.cache;
 
-import org.opensearch.core.internal.io.IOUtils;
+import org.opensearch.common.annotation.PublicApi;
+import org.opensearch.common.util.io.IOUtils;
 import org.opensearch.index.AbstractIndexComponent;
 import org.opensearch.index.IndexSettings;
 import org.opensearch.index.cache.bitset.BitsetFilterCache;
@@ -44,8 +45,9 @@ import java.io.IOException;
 /**
  * Wrapping class for the index cache
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class IndexCache extends AbstractIndexComponent implements Closeable {
 
     private final QueryCache queryCache;

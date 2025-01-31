@@ -40,44 +40,54 @@ import org.opensearch.action.FailedNodeException;
 import org.opensearch.action.OriginalIndices;
 import org.opensearch.action.RoutingMissingException;
 import org.opensearch.action.TimestampParsingException;
+import org.opensearch.action.admin.indices.view.ViewAlreadyExistsException;
+import org.opensearch.action.admin.indices.view.ViewNotFoundException;
 import org.opensearch.action.search.SearchPhaseExecutionException;
 import org.opensearch.action.search.ShardSearchFailure;
 import org.opensearch.action.support.replication.ReplicationOperation;
 import org.opensearch.client.AbstractClientHeadersTestCase;
-import org.opensearch.cluster.NotMasterException;
 import org.opensearch.cluster.action.shard.ShardStateAction;
 import org.opensearch.cluster.block.ClusterBlockException;
 import org.opensearch.cluster.block.IndexCreateBlockException;
 import org.opensearch.cluster.coordination.CoordinationStateRejectedException;
 import org.opensearch.cluster.coordination.NoClusterManagerBlockService;
+import org.opensearch.cluster.coordination.NodeHealthCheckFailureException;
 import org.opensearch.cluster.decommission.DecommissioningFailedException;
 import org.opensearch.cluster.decommission.NodeDecommissionedException;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.routing.IllegalShardRoutingStateException;
+import org.opensearch.cluster.routing.NodeWeighedAwayException;
+import org.opensearch.cluster.routing.PreferenceBasedSearchNotAllowedException;
 import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.cluster.routing.ShardRoutingState;
 import org.opensearch.cluster.routing.TestShardRouting;
 import org.opensearch.cluster.routing.UnsupportedWeightedRoutingStateException;
 import org.opensearch.cluster.service.ClusterManagerThrottlingException;
-import org.opensearch.common.ParsingException;
-import org.opensearch.common.Strings;
 import org.opensearch.common.UUIDs;
-import org.opensearch.common.breaker.CircuitBreaker;
-import org.opensearch.common.breaker.CircuitBreakingException;
+import org.opensearch.common.breaker.ResponseLimitBreachedException;
 import org.opensearch.common.collect.Tuple;
 import org.opensearch.common.io.PathUtils;
 import org.opensearch.common.io.stream.BytesStreamOutput;
-import org.opensearch.common.io.stream.NotSerializableExceptionWrapper;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.transport.TransportAddress;
-import org.opensearch.common.unit.ByteSizeValue;
 import org.opensearch.common.util.CancellableThreadsTests;
 import org.opensearch.common.util.set.Sets;
-import org.opensearch.common.xcontent.XContentLocation;
-import org.opensearch.discovery.MasterNotDiscoveredException;
+import org.opensearch.core.common.ParsingException;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.breaker.CircuitBreaker;
+import org.opensearch.core.common.breaker.CircuitBreakingException;
+import org.opensearch.core.common.io.stream.NotSerializableExceptionWrapper;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.transport.TransportAddress;
+import org.opensearch.core.common.unit.ByteSizeValue;
+import org.opensearch.core.index.Index;
+import org.opensearch.core.index.shard.ShardId;
+import org.opensearch.core.index.snapshots.IndexShardSnapshotException;
+import org.opensearch.core.index.snapshots.IndexShardSnapshotFailedException;
+import org.opensearch.core.rest.RestStatus;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.XContentLocation;
+import org.opensearch.crypto.CryptoRegistryException;
 import org.opensearch.env.ShardLockObtainFailedException;
-import org.opensearch.index.Index;
 import org.opensearch.index.engine.RecoveryEngineException;
 import org.opensearch.index.query.QueryShardException;
 import org.opensearch.index.seqno.RetentionLeaseAlreadyExistsException;
@@ -86,17 +96,15 @@ import org.opensearch.index.seqno.RetentionLeaseNotFoundException;
 import org.opensearch.index.shard.IllegalIndexShardStateException;
 import org.opensearch.index.shard.IndexShardState;
 import org.opensearch.index.shard.PrimaryShardClosedException;
-import org.opensearch.index.shard.ShardId;
 import org.opensearch.index.shard.ShardNotInPrimaryModeException;
 import org.opensearch.indices.IndexTemplateMissingException;
+import org.opensearch.indices.InvalidIndexContextException;
 import org.opensearch.indices.InvalidIndexTemplateException;
 import org.opensearch.indices.recovery.PeerRecoveryNotFound;
 import org.opensearch.indices.recovery.RecoverFilesRecoveryException;
 import org.opensearch.indices.replication.common.ReplicationFailedException;
 import org.opensearch.ingest.IngestProcessorException;
-import org.opensearch.cluster.coordination.NodeHealthCheckFailureException;
 import org.opensearch.repositories.RepositoryException;
-import org.opensearch.rest.RestStatus;
 import org.opensearch.rest.action.admin.indices.AliasesNotFoundException;
 import org.opensearch.search.SearchContextMissingException;
 import org.opensearch.search.SearchException;
@@ -104,6 +112,7 @@ import org.opensearch.search.SearchParseException;
 import org.opensearch.search.SearchShardTarget;
 import org.opensearch.search.aggregations.MultiBucketConsumerService;
 import org.opensearch.search.internal.ShardSearchContextId;
+import org.opensearch.search.pipeline.SearchPipelineProcessingException;
 import org.opensearch.snapshots.Snapshot;
 import org.opensearch.snapshots.SnapshotException;
 import org.opensearch.snapshots.SnapshotId;
@@ -157,7 +166,8 @@ public class ExceptionSerializationTests extends OpenSearchTestCase {
         final Set<Class<?>> hasDedicatedWrite = new HashSet<>();
         final Set<Class<?>> registered = new HashSet<>();
         final String path = "/org/opensearch";
-        final Path startPath = PathUtils.get(OpenSearchException.class.getProtectionDomain().getCodeSource().getLocation().toURI())
+        final Path coreLibStartPath = PathUtils.get(OpenSearchException.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+        final Path startPath = PathUtils.get(OpenSearchServerException.class.getProtectionDomain().getCodeSource().getLocation().toURI())
             .resolve("org")
             .resolve("opensearch");
         final Set<String> ignore = Sets.newHashSet(
@@ -239,15 +249,19 @@ public class ExceptionSerializationTests extends OpenSearchTestCase {
             }
         };
 
+        // walk the core library start path
+        Files.walkFileTree(coreLibStartPath, visitor);
+        // walk the server module start path
         Files.walkFileTree(startPath, visitor);
         final Path testStartPath = PathUtils.get(ExceptionSerializationTests.class.getResource(path).toURI());
         Files.walkFileTree(testStartPath, visitor);
         assertTrue(notRegistered.remove(TestException.class));
         assertTrue(notRegistered.remove(UnknownHeaderException.class));
-        // Remove the deprecated exception classes from the unregistered list.
-        assertTrue(notRegistered.remove(NotMasterException.class));
-        assertTrue(notRegistered.remove(MasterNotDiscoveredException.class));
-        assertTrue("Classes subclassing OpenSearchException must be registered \n" + notRegistered.toString(), notRegistered.isEmpty());
+        assertTrue(
+            "Classes subclassing OpenSearchException must be registered in OpenSearchException.OpenSearchExceptionHandle \n"
+                + notRegistered,
+            notRegistered.isEmpty()
+        );
         assertTrue(registered.removeAll(OpenSearchException.getRegisteredKeys())); // check
         assertEquals(registered.toString(), 0, registered.size());
     }
@@ -529,9 +543,15 @@ public class ExceptionSerializationTests extends OpenSearchTestCase {
 
     public void testNotSerializableExceptionWrapper() throws IOException {
         NotSerializableExceptionWrapper ex = serialize(new NotSerializableExceptionWrapper(new NullPointerException()));
-        assertEquals("{\"type\":\"null_pointer_exception\",\"reason\":\"null_pointer_exception: null\"}", Strings.toString(ex));
+        assertEquals(
+            "{\"type\":\"null_pointer_exception\",\"reason\":\"null_pointer_exception: null\"}",
+            Strings.toString(MediaTypeRegistry.JSON, ex)
+        );
         ex = serialize(new NotSerializableExceptionWrapper(new IllegalArgumentException("nono!")));
-        assertEquals("{\"type\":\"illegal_argument_exception\",\"reason\":\"illegal_argument_exception: nono!\"}", Strings.toString(ex));
+        assertEquals(
+            "{\"type\":\"illegal_argument_exception\",\"reason\":\"illegal_argument_exception: nono!\"}",
+            Strings.toString(MediaTypeRegistry.JSON, ex)
+        );
 
         class UnknownException extends Exception {
             UnknownException(final String message) {
@@ -702,7 +722,7 @@ public class ExceptionSerializationTests extends OpenSearchTestCase {
 
     public void testIds() {
         Map<Integer, Class<? extends OpenSearchException>> ids = new HashMap<>();
-        ids.put(0, org.opensearch.index.snapshots.IndexShardSnapshotFailedException.class);
+        ids.put(0, IndexShardSnapshotFailedException.class);
         ids.put(1, org.opensearch.search.dfs.DfsPhaseExecutionException.class);
         ids.put(2, org.opensearch.common.util.CancellableThreads.ExecutionCancelledException.class);
         ids.put(3, org.opensearch.discovery.ClusterManagerNotDiscoveredException.class);
@@ -742,7 +762,7 @@ public class ExceptionSerializationTests extends OpenSearchTestCase {
         ids.put(37, org.opensearch.index.mapper.MapperException.class);
         ids.put(38, org.opensearch.indices.InvalidTypeNameException.class);
         ids.put(39, org.opensearch.snapshots.SnapshotRestoreException.class);
-        ids.put(40, org.opensearch.common.ParsingException.class);
+        ids.put(40, ParsingException.class);
         ids.put(41, org.opensearch.index.shard.IndexShardClosedException.class);
         ids.put(42, org.opensearch.indices.recovery.RecoverFilesRecoveryException.class);
         ids.put(43, org.opensearch.index.translog.TruncatedTranslogException.class);
@@ -764,7 +784,7 @@ public class ExceptionSerializationTests extends OpenSearchTestCase {
         ids.put(59, null); // was OpenSearchRejectedExecutionException, which is no longer an instance of OpenSearchException
         ids.put(60, null); // EarlyTerminationException was removed in 6.0
         ids.put(61, null); // RoutingValidationException was removed in 5.0
-        ids.put(62, org.opensearch.common.io.stream.NotSerializableExceptionWrapper.class);
+        ids.put(62, NotSerializableExceptionWrapper.class);
         ids.put(63, org.opensearch.indices.AliasFilterParsingException.class);
         ids.put(64, null); // DeleteByQueryFailedEngineException was removed in 3.0
         ids.put(65, org.opensearch.gateway.GatewayException.class);
@@ -797,7 +817,7 @@ public class ExceptionSerializationTests extends OpenSearchTestCase {
         ids.put(95, null);
         ids.put(96, org.opensearch.snapshots.InvalidSnapshotNameException.class);
         ids.put(97, org.opensearch.index.shard.IllegalIndexShardStateException.class);
-        ids.put(98, org.opensearch.index.snapshots.IndexShardSnapshotException.class);
+        ids.put(98, IndexShardSnapshotException.class);
         ids.put(99, org.opensearch.index.shard.IndexShardNotStartedException.class);
         ids.put(100, org.opensearch.action.search.SearchPhaseExecutionException.class);
         ids.put(101, org.opensearch.transport.ActionNotFoundTransportException.class);
@@ -832,7 +852,7 @@ public class ExceptionSerializationTests extends OpenSearchTestCase {
         ids.put(130, org.opensearch.action.NoShardAvailableActionException.class);
         ids.put(131, org.opensearch.action.UnavailableShardsException.class);
         ids.put(132, org.opensearch.index.engine.FlushFailedEngineException.class);
-        ids.put(133, org.opensearch.common.breaker.CircuitBreakingException.class);
+        ids.put(133, org.opensearch.core.common.breaker.CircuitBreakingException.class);
         ids.put(134, org.opensearch.transport.NodeNotConnectedException.class);
         ids.put(135, org.opensearch.index.mapper.StrictDynamicMappingException.class);
         ids.put(136, org.opensearch.action.support.replication.TransportReplicationAction.RetryOnReplicaException.class);
@@ -845,7 +865,7 @@ public class ExceptionSerializationTests extends OpenSearchTestCase {
         ids.put(143, org.opensearch.script.ScriptException.class);
         ids.put(144, org.opensearch.cluster.NotClusterManagerException.class);
         ids.put(145, org.opensearch.OpenSearchStatusException.class);
-        ids.put(146, org.opensearch.tasks.TaskCancelledException.class);
+        ids.put(146, org.opensearch.core.tasks.TaskCancelledException.class);
         ids.put(147, org.opensearch.env.ShardLockObtainFailedException.class);
         ids.put(148, null);
         ids.put(149, MultiBucketConsumerService.TooManyBucketsException.class);
@@ -867,6 +887,14 @@ public class ExceptionSerializationTests extends OpenSearchTestCase {
         ids.put(165, ClusterManagerThrottlingException.class);
         ids.put(166, SnapshotInUseDeletionException.class);
         ids.put(167, UnsupportedWeightedRoutingStateException.class);
+        ids.put(168, PreferenceBasedSearchNotAllowedException.class);
+        ids.put(169, NodeWeighedAwayException.class);
+        ids.put(170, SearchPipelineProcessingException.class);
+        ids.put(171, CryptoRegistryException.class);
+        ids.put(172, ViewNotFoundException.class);
+        ids.put(173, ViewAlreadyExistsException.class);
+        ids.put(174, InvalidIndexContextException.class);
+        ids.put(175, ResponseLimitBreachedException.class);
         ids.put(10001, IndexCreateBlockException.class);
 
         Map<Class<? extends OpenSearchException>, Integer> reverse = new HashMap<>();
@@ -878,6 +906,10 @@ public class ExceptionSerializationTests extends OpenSearchTestCase {
 
         for (final Tuple<Integer, Class<? extends OpenSearchException>> tuple : OpenSearchException.classes()) {
             assertNotNull(tuple.v1());
+            assertNotNull(
+                tuple.v2().getName() + " not found in ExceptionSerializationTests.testIds. Please add it.",
+                reverse.get(tuple.v2())
+            );
             assertEquals((int) reverse.get(tuple.v2()), (int) tuple.v1());
         }
 

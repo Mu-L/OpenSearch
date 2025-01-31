@@ -32,10 +32,8 @@
 
 package org.opensearch.action.admin.cluster.state;
 
-import com.carrotsearch.hppc.cursors.ObjectObjectCursor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.opensearch.action.ActionListener;
 import org.opensearch.action.support.ActionFilters;
 import org.opensearch.action.support.clustermanager.TransportClusterManagerNodeReadAction;
 import org.opensearch.cluster.ClusterState;
@@ -48,14 +46,18 @@ import org.opensearch.cluster.metadata.Metadata;
 import org.opensearch.cluster.metadata.Metadata.Custom;
 import org.opensearch.cluster.routing.RoutingTable;
 import org.opensearch.cluster.service.ClusterService;
+import org.opensearch.common.Nullable;
 import org.opensearch.common.inject.Inject;
-import org.opensearch.common.io.stream.StreamInput;
 import org.opensearch.common.unit.TimeValue;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.gateway.remote.RemoteClusterStateService;
 import org.opensearch.node.NodeClosedException;
 import org.opensearch.threadpool.ThreadPool;
 import org.opensearch.transport.TransportService;
 
 import java.io.IOException;
+import java.util.Map;
 import java.util.function.Predicate;
 
 /**
@@ -80,7 +82,8 @@ public class TransportClusterStateAction extends TransportClusterManagerNodeRead
         ClusterService clusterService,
         ThreadPool threadPool,
         ActionFilters actionFilters,
-        IndexNameExpressionResolver indexNameExpressionResolver
+        IndexNameExpressionResolver indexNameExpressionResolver,
+        @Nullable RemoteClusterStateService remoteClusterStateService
     ) {
         super(
             ClusterStateAction.NAME,
@@ -92,6 +95,8 @@ public class TransportClusterStateAction extends TransportClusterManagerNodeRead
             ClusterStateRequest::new,
             indexNameExpressionResolver
         );
+        this.localExecuteSupported = true;
+        this.remoteClusterStateService = remoteClusterStateService;
     }
 
     @Override
@@ -125,9 +130,12 @@ public class TransportClusterStateAction extends TransportClusterManagerNodeRead
             ? clusterState -> true
             : clusterState -> clusterState.metadata().version() >= request.waitForMetadataVersion();
 
+        // action will be executed on local node, if either the request is local only (or) the local node has the same cluster-state as
+        // ClusterManager
         final Predicate<ClusterState> acceptableClusterStateOrNotMasterPredicate = request.local()
-            ? acceptableClusterStatePredicate
-            : acceptableClusterStatePredicate.or(clusterState -> clusterState.nodes().isLocalNodeElectedClusterManager() == false);
+            || !state.nodes().isLocalNodeElectedClusterManager()
+                ? acceptableClusterStatePredicate
+                : acceptableClusterStatePredicate.or(clusterState -> clusterState.nodes().isLocalNodeElectedClusterManager() == false);
 
         if (acceptableClusterStatePredicate.test(state)) {
             ActionListener.completeWith(listener, () -> buildResponse(request, state));
@@ -212,23 +220,22 @@ public class TransportClusterStateAction extends TransportClusterManagerNodeRead
             }
 
             // filter out metadata that shouldn't be returned by the API
-            for (ObjectObjectCursor<String, Custom> custom : currentState.metadata().customs()) {
-                if (custom.value.context().contains(Metadata.XContentContext.API) == false) {
-                    mdBuilder.removeCustom(custom.key);
+            for (final Map.Entry<String, Custom> custom : currentState.metadata().customs().entrySet()) {
+                if (custom.getValue().context().contains(Metadata.XContentContext.API) == false) {
+                    mdBuilder.removeCustom(custom.getKey());
                 }
             }
         }
         builder.metadata(mdBuilder);
 
         if (request.customs()) {
-            for (ObjectObjectCursor<String, ClusterState.Custom> custom : currentState.customs()) {
-                if (custom.value.isPrivate() == false) {
-                    builder.putCustom(custom.key, custom.value);
+            for (final Map.Entry<String, ClusterState.Custom> custom : currentState.customs().entrySet()) {
+                if (custom.getValue().isPrivate() == false) {
+                    builder.putCustom(custom.getKey(), custom.getValue());
                 }
             }
         }
 
         return new ClusterStateResponse(currentState.getClusterName(), builder.build(), false);
     }
-
 }

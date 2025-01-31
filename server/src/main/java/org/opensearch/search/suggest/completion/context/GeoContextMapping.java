@@ -43,9 +43,9 @@ import org.opensearch.common.geo.GeoPoint;
 import org.opensearch.common.geo.GeoUtils;
 import org.opensearch.common.logging.DeprecationLogger;
 import org.opensearch.common.unit.DistanceUnit;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
-import org.opensearch.common.xcontent.XContentParser.Token;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
+import org.opensearch.core.xcontent.XContentParser.Token;
 import org.opensearch.index.mapper.GeoPointFieldMapper;
 import org.opensearch.index.mapper.MappedFieldType;
 import org.opensearch.index.mapper.ParseContext;
@@ -71,7 +71,7 @@ import static org.opensearch.geometry.utils.Geohash.stringEncode;
  * The suggestions can be boosted and/or filtered depending on
  * whether it falls within an area, represented by a query geo hash
  * with a specified precision
- *
+ * <p>
  * {@link GeoQueryContext} defines the options for constructing
  * a unit of query context for this context type
  *

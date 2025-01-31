@@ -31,7 +31,6 @@
 
 package org.opensearch.action.admin.cluster.configuration;
 
-import org.apache.lucene.util.SetOnce;
 import org.opensearch.OpenSearchTimeoutException;
 import org.opensearch.Version;
 import org.opensearch.action.support.ActionFilters;
@@ -49,12 +48,14 @@ import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.node.DiscoveryNodeRole;
 import org.opensearch.cluster.node.DiscoveryNodes.Builder;
 import org.opensearch.cluster.service.ClusterService;
-import org.opensearch.common.Strings;
-import org.opensearch.common.io.stream.StreamInput;
+import org.opensearch.common.SetOnce;
 import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.common.util.concurrent.ThreadContext;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.telemetry.tracing.noop.NoopTracer;
 import org.opensearch.test.OpenSearchTestCase;
 import org.opensearch.test.transport.MockTransport;
 import org.opensearch.threadpool.TestThreadPool;
@@ -139,7 +140,8 @@ public class TransportAddVotingConfigExclusionsActionTests extends OpenSearchTes
             TransportService.NOOP_TRANSPORT_INTERCEPTOR,
             boundTransportAddress -> localNode,
             null,
-            emptySet()
+            emptySet(),
+            NoopTracer.INSTANCE
         );
 
         final Settings.Builder nodeSettingsBuilder = Settings.builder();
@@ -386,7 +388,9 @@ public class TransportAddVotingConfigExclusionsActionTests extends OpenSearchTes
                 Strings.EMPTY_ARRAY,
                 TimeValue.timeValueSeconds(30)
             ),
-            expectSuccess(e -> { countDownLatch.countDown(); })
+            expectSuccess(e -> {
+                countDownLatch.countDown();
+            })
         );
 
         assertTrue(countDownLatch.await(30, TimeUnit.SECONDS));
@@ -430,7 +434,9 @@ public class TransportAddVotingConfigExclusionsActionTests extends OpenSearchTes
             localNode,
             AddVotingConfigExclusionsAction.NAME,
             new AddVotingConfigExclusionsRequest("absent_node"),
-            expectSuccess(e -> { countDownLatch.countDown(); })
+            expectSuccess(e -> {
+                countDownLatch.countDown();
+            })
         );
 
         assertTrue(countDownLatch.await(30, TimeUnit.SECONDS));

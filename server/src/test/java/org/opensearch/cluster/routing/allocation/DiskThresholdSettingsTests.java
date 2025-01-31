@@ -34,7 +34,7 @@ package org.opensearch.cluster.routing.allocation;
 
 import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.unit.ByteSizeValue;
+import org.opensearch.core.common.unit.ByteSizeValue;
 import org.opensearch.test.OpenSearchTestCase;
 
 import java.util.Locale;
@@ -220,7 +220,6 @@ public class DiskThresholdSettingsTests extends OpenSearchTestCase {
         final IllegalArgumentException e = expectThrows(IllegalArgumentException.class, () -> clusterSettings.applySettings(newSettings));
         final String expected = "illegal value can't update [cluster.routing.allocation.disk.watermark.high] from [90%] to [75%]";
         assertThat(e, hasToString(containsString(expected)));
-        assertNotNull(e.getCause());
         assertNotNull(e.getCause());
         assertThat(e.getCause(), instanceOf(IllegalArgumentException.class));
         final IllegalArgumentException cause = (IllegalArgumentException) e.getCause();

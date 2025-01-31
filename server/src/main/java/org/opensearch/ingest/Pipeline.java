@@ -34,6 +34,8 @@ package org.opensearch.ingest;
 
 import org.opensearch.OpenSearchParseException;
 import org.opensearch.common.Nullable;
+import org.opensearch.common.metrics.OperationMetrics;
+import org.opensearch.script.ScriptService;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -41,9 +43,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
-
-import org.opensearch.script.ScriptService;
 
 /**
  * A pipeline is a list of {@link Processor} instances grouped under a unique id.
@@ -63,7 +64,7 @@ public final class Pipeline {
     @Nullable
     private final Integer version;
     private final CompoundProcessor compoundProcessor;
-    private final IngestMetric metrics;
+    private final OperationMetrics metrics;
     private final LongSupplier relativeTimeProvider;
 
     public Pipeline(String id, @Nullable String description, @Nullable Integer version, CompoundProcessor compoundProcessor) {
@@ -82,7 +83,7 @@ public final class Pipeline {
         this.description = description;
         this.compoundProcessor = compoundProcessor;
         this.version = version;
-        this.metrics = new IngestMetric();
+        this.metrics = new OperationMetrics();
         this.relativeTimeProvider = relativeTimeProvider;
     }
 
@@ -123,18 +124,18 @@ public final class Pipeline {
 
     /**
      * Modifies the data of a document to be indexed based on the processor this pipeline holds
-     *
-     * If <code>null</code> is returned then this document will be dropped and not indexed, otherwise
+     * <p>
+     * If {@code null} is returned then this document will be dropped and not indexed, otherwise
      * this document will be kept and indexed.
      */
     public void execute(IngestDocument ingestDocument, BiConsumer<IngestDocument, Exception> handler) {
         final long startTimeInNanos = relativeTimeProvider.getAsLong();
-        metrics.preIngest();
+        metrics.before();
         compoundProcessor.execute(ingestDocument, (result, e) -> {
             long ingestTimeInMillis = TimeUnit.NANOSECONDS.toMillis(relativeTimeProvider.getAsLong() - startTimeInNanos);
-            metrics.postIngest(ingestTimeInMillis);
+            metrics.after(ingestTimeInMillis);
             if (e != null) {
-                metrics.ingestFailed();
+                metrics.failed();
             }
             handler.accept(result, e);
         });
@@ -198,7 +199,31 @@ public final class Pipeline {
     /**
      * The metrics associated with this pipeline.
      */
-    public IngestMetric getMetrics() {
+    public OperationMetrics getMetrics() {
         return metrics;
+    }
+
+    /**
+     * Modifies the data of batched multiple documents to be indexed based on the processor this pipeline holds
+     * <p>
+     * If {@code null} is returned then this document will be dropped and not indexed, otherwise
+     * this document will be kept and indexed. Document and the exception happened during processing are kept in
+     * IngestDocumentWrapper and callback to upper level.
+     *
+     * @param ingestDocumentWrappers a list of wrapped IngestDocument to ingest.
+     * @param handler callback with IngestDocument result and exception wrapped in IngestDocumentWrapper.
+     */
+    public void batchExecute(List<IngestDocumentWrapper> ingestDocumentWrappers, Consumer<List<IngestDocumentWrapper>> handler) {
+        final long startTimeInNanos = relativeTimeProvider.getAsLong();
+        int size = ingestDocumentWrappers.size();
+        metrics.beforeN(size);
+        compoundProcessor.batchExecute(ingestDocumentWrappers, results -> {
+            long ingestTimeInMillis = TimeUnit.NANOSECONDS.toMillis(relativeTimeProvider.getAsLong() - startTimeInNanos);
+            metrics.afterN(results.size(), ingestTimeInMillis);
+
+            int failedCount = (int) results.stream().filter(t -> t.getException() != null).count();
+            metrics.failedN(failedCount);
+            handler.accept(results);
+        });
     }
 }

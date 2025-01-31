@@ -36,16 +36,16 @@ import org.apache.lucene.search.BoostQuery;
 import org.apache.lucene.search.FuzzyQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.util.automaton.Operations;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.ParsingException;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
 import org.opensearch.common.lucene.search.Queries;
 import org.opensearch.common.regex.Regex;
 import org.opensearch.common.unit.Fuzziness;
 import org.opensearch.common.xcontent.LoggingDeprecationHandler;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.ParsingException;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.analysis.NamedAnalyzer;
 import org.opensearch.index.query.support.QueryParsers;
 import org.opensearch.index.search.QueryParserHelper;
@@ -119,7 +119,7 @@ public class QueryStringQueryBuilder extends AbstractQueryBuilder<QueryStringQue
      * currently _ALL. Uses a TreeMap to hold the fields so boolean clauses are
      * always sorted in same order for generated Lucene query for easier
      * testing.
-     *
+     * <p>
      * Can be changed back to HashMap once https://issues.apache.org/jira/browse/LUCENE-6305 is fixed.
      */
     private final Map<String, Float> fieldsAndWeights = new TreeMap<>();
@@ -940,7 +940,13 @@ public class QueryStringQueryBuilder extends AbstractQueryBuilder<QueryStringQue
         queryParser.setFuzziness(fuzziness);
         queryParser.setFuzzyPrefixLength(fuzzyPrefixLength);
         queryParser.setFuzzyMaxExpansions(fuzzyMaxExpansions);
-        queryParser.setFuzzyRewriteMethod(QueryParsers.parseRewriteMethod(this.fuzzyRewrite, LoggingDeprecationHandler.INSTANCE));
+        queryParser.setFuzzyRewriteMethod(
+            QueryParsers.parseRewriteMethod(
+                this.fuzzyRewrite,
+                FuzzyQuery.defaultRewriteMethod(fuzzyMaxExpansions),
+                LoggingDeprecationHandler.INSTANCE
+            )
+        );
         queryParser.setMultiTermRewriteMethod(QueryParsers.parseRewriteMethod(this.rewrite, LoggingDeprecationHandler.INSTANCE));
         queryParser.setTimeZone(timeZone);
         queryParser.setDeterminizeWorkLimit(maxDeterminizedStates);

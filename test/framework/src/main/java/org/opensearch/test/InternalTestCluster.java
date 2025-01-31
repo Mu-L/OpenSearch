@@ -31,14 +31,12 @@
 
 package org.opensearch.test;
 
-import com.carrotsearch.hppc.ObjectLongMap;
-import com.carrotsearch.hppc.cursors.IntObjectCursor;
-import com.carrotsearch.hppc.cursors.ObjectObjectCursor;
 import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.SeedUtils;
 import com.carrotsearch.randomizedtesting.generators.RandomNumbers;
 import com.carrotsearch.randomizedtesting.generators.RandomPicks;
 import com.carrotsearch.randomizedtesting.generators.RandomStrings;
+
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.lucene.store.AlreadyClosedException;
@@ -57,11 +55,11 @@ import org.opensearch.cluster.action.index.MappingUpdatedAction;
 import org.opensearch.cluster.coordination.ClusterBootstrapService;
 import org.opensearch.cluster.coordination.NoClusterManagerBlockService;
 import org.opensearch.cluster.metadata.IndexMetadata;
+import org.opensearch.cluster.metadata.RepositoriesMetadata;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.node.DiscoveryNodeRole;
 import org.opensearch.cluster.node.DiscoveryNodes;
 import org.opensearch.cluster.routing.IndexRoutingTable;
-import org.opensearch.cluster.routing.IndexShardRoutingTable;
 import org.opensearch.cluster.routing.OperationRouting;
 import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.cluster.routing.allocation.DiskThresholdSettings;
@@ -69,30 +67,32 @@ import org.opensearch.cluster.routing.allocation.decider.ThrottlingAllocationDec
 import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.Nullable;
 import org.opensearch.common.Randomness;
-import org.opensearch.common.Strings;
-import org.opensearch.common.breaker.CircuitBreaker;
-import org.opensearch.common.component.LifecycleListener;
-import org.opensearch.common.io.FileSystemUtils;
-import org.opensearch.common.io.stream.NamedWriteableRegistry;
 import org.opensearch.common.lease.Releasables;
+import org.opensearch.common.lifecycle.LifecycleListener;
 import org.opensearch.common.settings.MockSecureSettings;
 import org.opensearch.common.settings.SecureSettings;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.settings.Settings.Builder;
-import org.opensearch.common.unit.ByteSizeUnit;
-import org.opensearch.common.unit.ByteSizeValue;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.common.util.PageCacheRecycler;
-import org.opensearch.common.util.concurrent.OpenSearchExecutors;
 import org.opensearch.common.util.concurrent.FutureUtils;
+import org.opensearch.common.util.concurrent.OpenSearchExecutors;
 import org.opensearch.common.util.concurrent.ThreadContext;
+import org.opensearch.common.util.io.IOUtils;
 import org.opensearch.common.util.set.Sets;
-import org.opensearch.core.internal.io.IOUtils;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.breaker.CircuitBreaker;
+import org.opensearch.core.common.io.stream.NamedWriteableRegistry;
+import org.opensearch.core.common.unit.ByteSizeUnit;
+import org.opensearch.core.common.unit.ByteSizeValue;
+import org.opensearch.core.index.Index;
+import org.opensearch.core.index.shard.ShardId;
+import org.opensearch.core.indices.breaker.CircuitBreakerService;
+import org.opensearch.core.util.FileSystemUtils;
 import org.opensearch.env.Environment;
 import org.opensearch.env.NodeEnvironment;
 import org.opensearch.env.ShardLockObtainFailedException;
 import org.opensearch.http.HttpServerTransport;
-import org.opensearch.index.Index;
 import org.opensearch.index.IndexService;
 import org.opensearch.index.IndexingPressure;
 import org.opensearch.index.engine.DocIdSeqNoAndSource;
@@ -103,9 +103,7 @@ import org.opensearch.index.seqno.SeqNoStats;
 import org.opensearch.index.seqno.SequenceNumbers;
 import org.opensearch.index.shard.IndexShard;
 import org.opensearch.index.shard.IndexShardTestCase;
-import org.opensearch.index.shard.ShardId;
 import org.opensearch.indices.IndicesService;
-import org.opensearch.indices.breaker.CircuitBreakerService;
 import org.opensearch.indices.breaker.HierarchyCircuitBreakerService;
 import org.opensearch.indices.fielddata.cache.IndicesFieldDataCache;
 import org.opensearch.indices.recovery.RecoverySettings;
@@ -155,26 +153,27 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
-import static org.apache.lucene.tests.util.LuceneTestCase.TEST_NIGHTLY;
-import static org.apache.lucene.tests.util.LuceneTestCase.rarely;
 import static org.opensearch.cluster.coordination.ClusterBootstrapService.INITIAL_CLUSTER_MANAGER_NODES_SETTING;
 import static org.opensearch.common.unit.TimeValue.timeValueMillis;
 import static org.opensearch.common.unit.TimeValue.timeValueSeconds;
 import static org.opensearch.discovery.DiscoveryModule.DISCOVERY_TYPE_SETTING;
 import static org.opensearch.discovery.DiscoveryModule.ZEN2_DISCOVERY_TYPE;
 import static org.opensearch.discovery.FileBasedSeedHostsProvider.UNICAST_HOSTS_FILE;
-import static org.opensearch.test.NodeRoles.onlyRoles;
-import static org.opensearch.test.OpenSearchTestCase.assertBusy;
-import static org.opensearch.test.OpenSearchTestCase.randomFrom;
 import static org.opensearch.test.NodeRoles.dataOnlyNode;
 import static org.opensearch.test.NodeRoles.noRoles;
 import static org.opensearch.test.NodeRoles.onlyRole;
+import static org.opensearch.test.NodeRoles.onlyRoles;
 import static org.opensearch.test.NodeRoles.removeRoles;
+import static org.opensearch.test.OpenSearchTestCase.assertBusy;
+import static org.opensearch.test.OpenSearchTestCase.randomBoolean;
+import static org.opensearch.test.OpenSearchTestCase.randomFrom;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
+import static org.apache.lucene.tests.util.LuceneTestCase.TEST_NIGHTLY;
+import static org.apache.lucene.tests.util.LuceneTestCase.rarely;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThat;
@@ -218,15 +217,11 @@ public final class InternalTestCluster extends TestCluster {
         nodeAndClient.node.settings()
     );
 
+    private static final String DEFAULT_SEARCH_CACHE_SIZE_BYTES = "2gb";
+    private static final String DEFAULT_SEARCH_CACHE_SIZE_PERCENT = "5%";
+
     public static final int DEFAULT_LOW_NUM_CLUSTER_MANAGER_NODES = 1;
     public static final int DEFAULT_HIGH_NUM_CLUSTER_MANAGER_NODES = 3;
-
-    /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #DEFAULT_LOW_NUM_CLUSTER_MANAGER_NODES} */
-    @Deprecated
-    public static final int DEFAULT_LOW_NUM_MASTER_NODES = DEFAULT_LOW_NUM_CLUSTER_MANAGER_NODES;
-    /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #DEFAULT_HIGH_NUM_CLUSTER_MANAGER_NODES} */
-    @Deprecated
-    public static final int DEFAULT_HIGH_NUM_MASTER_NODES = DEFAULT_HIGH_NUM_CLUSTER_MANAGER_NODES;
 
     static final int DEFAULT_MIN_NUM_DATA_NODES = 1;
     static final int DEFAULT_MAX_NUM_DATA_NODES = TEST_NIGHTLY ? 6 : 3;
@@ -684,11 +679,7 @@ public final class InternalTestCluster extends TestCluster {
         int size = numSearchNodes();
         if (size < n) {
             logger.info("increasing cluster size from {} to {}", size, n);
-            if (numSharedDedicatedClusterManagerNodes > 0) {
-                startSearchOnlyNodes(n - size);
-            } else {
-                startNodes(n - size, Settings.builder().put(onlyRole(Settings.EMPTY, DiscoveryNodeRole.SEARCH_ROLE)).build());
-            }
+            startNodes(n - size, Settings.builder().put(onlyRole(Settings.EMPTY, DiscoveryNodeRole.SEARCH_ROLE)).build());
             validateClusterFormed();
         }
     }
@@ -702,14 +693,14 @@ public final class InternalTestCluster extends TestCluster {
         int size = numSearchAndDataNodes();
         if (size < n) {
             logger.info("increasing cluster size from {} to {}", size, n);
-            if (numSharedDedicatedClusterManagerNodes > 0) {
-                startDataAndSearchNodes(n - size);
-            } else {
-                Set<DiscoveryNodeRole> searchAndDataRoles = new HashSet<>();
-                searchAndDataRoles.add(DiscoveryNodeRole.DATA_ROLE);
-                searchAndDataRoles.add(DiscoveryNodeRole.SEARCH_ROLE);
-                startNodes(n - size, Settings.builder().put(onlyRoles(Settings.EMPTY, searchAndDataRoles)).build());
-            }
+            Set<DiscoveryNodeRole> searchAndDataRoles = Set.of(DiscoveryNodeRole.DATA_ROLE, DiscoveryNodeRole.SEARCH_ROLE);
+            Settings settings = Settings.builder()
+                .put(
+                    Node.NODE_SEARCH_CACHE_SIZE_SETTING.getKey(),
+                    randomBoolean() ? DEFAULT_SEARCH_CACHE_SIZE_PERCENT : DEFAULT_SEARCH_CACHE_SIZE_BYTES
+                )
+                .build();
+            startNodes(n - size, Settings.builder().put(onlyRoles(settings, searchAndDataRoles)).build());
             validateClusterFormed();
         }
     }
@@ -902,25 +893,6 @@ public final class InternalTestCluster extends TestCluster {
     }
 
     /**
-     * Returns a node client to the current cluster-manager node.
-     * Note: use this with care tests should not rely on a certain nodes client.
-     * @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #clusterManagerClient()}
-     */
-    @Deprecated
-    public Client masterClient() {
-        return clusterManagerClient();
-    }
-
-    /**
-     * Returns a node client to random node but not the cluster-manager. This method will fail if no non-cluster-manager client is available.
-     * @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #nonClusterManagerClient()}
-     */
-    @Deprecated
-    public Client nonMasterClient() {
-        return nonClusterManagerClient();
-    }
-
-    /**
      * Returns a client to a coordinating only node
      */
     public synchronized Client coordOnlyNodeClient() {
@@ -978,11 +950,6 @@ public final class InternalTestCluster extends TestCluster {
         }
     }
 
-    public static final int REMOVED_MINIMUM_CLUSTER_MANAGER_NODES = Integer.MAX_VALUE;
-    /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #REMOVED_MINIMUM_CLUSTER_MANAGER_NODES} */
-    @Deprecated
-    public static final int REMOVED_MINIMUM_MASTER_NODES = REMOVED_MINIMUM_CLUSTER_MANAGER_NODES;
-
     private final class NodeAndClient implements Closeable {
         private MockNode node;
         private final Settings originalNodeSettings;
@@ -1016,12 +983,6 @@ public final class InternalTestCluster extends TestCluster {
 
         public boolean isClusterManagerEligible() {
             return DiscoveryNode.isClusterManagerNode(node.settings());
-        }
-
-        /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #isClusterManagerEligible()} */
-        @Deprecated
-        public boolean isMasterEligible() {
-            return isClusterManagerEligible();
         }
 
         Client client() {
@@ -1325,6 +1286,12 @@ public final class InternalTestCluster extends TestCluster {
                         assertTrue("Expected node to exist: " + expectedNode + debugString, discoveryNodes.nodeExists(expectedNode));
                     }
                 });
+                states.forEach(cs -> {
+                    if (cs.nodes().getNodes().values().stream().findFirst().get().isRemoteStoreNode()) {
+                        RepositoriesMetadata repositoriesMetadata = cs.metadata().custom(RepositoriesMetadata.TYPE);
+                        assertTrue(repositoriesMetadata != null && !repositoriesMetadata.repositories().isEmpty());
+                    }
+                });
             }, 30, TimeUnit.SECONDS);
         } catch (AssertionError ae) {
             throw new IllegalStateException("cluster failed to form", ae);
@@ -1496,15 +1463,15 @@ public final class InternalTestCluster extends TestCluster {
     public void assertSeqNos() throws Exception {
         assertBusy(() -> {
             final ClusterState state = clusterService().state();
-            for (ObjectObjectCursor<String, IndexRoutingTable> indexRoutingTable : state.routingTable().indicesRouting()) {
-                for (IntObjectCursor<IndexShardRoutingTable> indexShardRoutingTable : indexRoutingTable.value.shards()) {
-                    ShardRouting primaryShardRouting = indexShardRoutingTable.value.primaryShard();
+            for (final IndexRoutingTable indexRoutingTable : state.routingTable().indicesRouting().values()) {
+                for (var indexShardRoutingTable : indexRoutingTable.shards().values()) {
+                    ShardRouting primaryShardRouting = indexShardRoutingTable.primaryShard();
                     final IndexShard primaryShard = getShardOrNull(state, primaryShardRouting);
                     if (primaryShard == null) {
                         continue; // just ignore - shard movement
                     }
                     final SeqNoStats primarySeqNoStats;
-                    final ObjectLongMap<String> syncGlobalCheckpoints;
+                    final Map<String, Long> syncGlobalCheckpoints;
                     try {
                         primarySeqNoStats = primaryShard.seqNoStats();
                         syncGlobalCheckpoints = primaryShard.getInSyncGlobalCheckpoints();
@@ -1516,7 +1483,7 @@ public final class InternalTestCluster extends TestCluster {
                         primarySeqNoStats.getGlobalCheckpoint(),
                         not(equalTo(SequenceNumbers.UNASSIGNED_SEQ_NO))
                     );
-                    for (ShardRouting replicaShardRouting : indexShardRoutingTable.value.replicaShards()) {
+                    for (ShardRouting replicaShardRouting : indexShardRoutingTable.replicaShards()) {
                         final IndexShard replicaShard = getShardOrNull(state, replicaShardRouting);
                         if (replicaShard == null) {
                             continue; // just ignore - shard movement
@@ -1529,11 +1496,13 @@ public final class InternalTestCluster extends TestCluster {
                         }
                         assertThat(replicaShardRouting + " seq_no_stats mismatch", seqNoStats, equalTo(primarySeqNoStats));
                         // the local knowledge on the primary of the global checkpoint equals the global checkpoint on the shard
-                        assertThat(
-                            replicaShardRouting + " global checkpoint syncs mismatch",
-                            seqNoStats.getGlobalCheckpoint(),
-                            equalTo(syncGlobalCheckpoints.get(replicaShardRouting.allocationId().getId()))
-                        );
+                        if (primaryShard.isRemoteTranslogEnabled() == false) {
+                            assertThat(
+                                replicaShardRouting + " global checkpoint syncs mismatch",
+                                seqNoStats.getGlobalCheckpoint(),
+                                equalTo(syncGlobalCheckpoints.get(replicaShardRouting.allocationId().getId()))
+                            );
+                        }
                     }
                 }
             }
@@ -1546,9 +1515,9 @@ public final class InternalTestCluster extends TestCluster {
     public void assertSameDocIdsOnShards() throws Exception {
         assertBusy(() -> {
             ClusterState state = client().admin().cluster().prepareState().get().getState();
-            for (ObjectObjectCursor<String, IndexRoutingTable> indexRoutingTable : state.routingTable().indicesRouting()) {
-                for (IntObjectCursor<IndexShardRoutingTable> indexShardRoutingTable : indexRoutingTable.value.shards()) {
-                    ShardRouting primaryShardRouting = indexShardRoutingTable.value.primaryShard();
+            for (final IndexRoutingTable indexRoutingTable : state.routingTable().indicesRouting().values()) {
+                for (var indexShardRoutingTable : indexRoutingTable.shards().values()) {
+                    ShardRouting primaryShardRouting = indexShardRoutingTable.primaryShard();
                     IndexShard primaryShard = getShardOrNull(state, primaryShardRouting);
                     if (primaryShard == null) {
                         continue;
@@ -1559,7 +1528,7 @@ public final class InternalTestCluster extends TestCluster {
                     } catch (AlreadyClosedException ex) {
                         continue;
                     }
-                    for (ShardRouting replicaShardRouting : indexShardRoutingTable.value.replicaShards()) {
+                    for (ShardRouting replicaShardRouting : indexShardRoutingTable.replicaShards()) {
                         IndexShard replicaShard = getShardOrNull(state, replicaShardRouting);
                         if (replicaShard == null) {
                             continue;
@@ -1657,23 +1626,6 @@ public final class InternalTestCluster extends TestCluster {
         return getInstances(clazz, DATA_NODE_PREDICATE.or(CLUSTER_MANAGER_NODE_PREDICATE));
     }
 
-    /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #getCurrentClusterManagerNodeInstance(Class)} */
-    @Deprecated
-    public synchronized <T> T getCurrentMasterNodeInstance(Class<T> clazz) {
-        return getCurrentClusterManagerNodeInstance(clazz);
-    }
-
-    /**
-     * Returns an Iterable to all instances for the given class &gt;T&lt; across all data and cluster-manager nodes
-     * in the cluster.
-     *
-     * @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #getDataOrClusterManagerNodeInstances(Class)}
-     */
-    @Deprecated
-    public <T> Iterable<T> getDataOrMasterNodeInstances(Class<T> clazz) {
-        return getDataOrClusterManagerNodeInstances(clazz);
-    }
-
     private <T> Iterable<T> getInstances(Class<T> clazz, Predicate<NodeAndClient> predicate) {
         Iterable<NodeAndClient> filteredNodes = nodes.values().stream().filter(predicate)::iterator;
         List<T> instances = new ArrayList<>();
@@ -1696,12 +1648,6 @@ public final class InternalTestCluster extends TestCluster {
 
     public <T> T getClusterManagerNodeInstance(Class<T> clazz) {
         return getInstance(clazz, CLUSTER_MANAGER_NODE_PREDICATE);
-    }
-
-    /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #getClusterManagerNodeInstance(Class)} */
-    @Deprecated
-    public <T> T getMasterNodeInstance(Class<T> clazz) {
-        return getClusterManagerNodeInstance(clazz);
     }
 
     private synchronized <T> T getInstance(Class<T> clazz, Predicate<NodeAndClient> predicate) {
@@ -1814,7 +1760,7 @@ public final class InternalTestCluster extends TestCluster {
     /**
      * Stops any of the current nodes but not the cluster-manager node.
      */
-    public synchronized void stopRandomNonClusterManagerNode() throws IOException {
+    public synchronized void stopRandomNodeNotCurrentClusterManager() throws IOException {
         NodeAndClient nodeAndClient = getRandomNodeAndClient(new NodeNamePredicate(getClusterManagerName()).negate());
         if (nodeAndClient != null) {
             logger.info(
@@ -1827,23 +1773,38 @@ public final class InternalTestCluster extends TestCluster {
     }
 
     /**
-     * Stops the current cluster-manager node forcefully.
-     *
-     * @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #stopCurrentClusterManagerNode()}
+     * Stops all running nodes in cluster
      */
-    @Deprecated
-    public synchronized void stopCurrentMasterNode() throws IOException {
-        stopCurrentClusterManagerNode();
+    public void stopAllNodes() {
+        try {
+            if (numDataAndClusterManagerNodes() != numClusterManagerNodes()) {
+                int totalDataNodes = numDataNodes();
+                while (totalDataNodes > 0) {
+                    stopRandomDataNode();
+                    totalDataNodes -= 1;
+                }
+            }
+            int totalClusterManagerNodes = numClusterManagerNodes();
+            while (totalClusterManagerNodes > 1) {
+                stopRandomNodeNotCurrentClusterManager();
+                totalClusterManagerNodes -= 1;
+            }
+            stopCurrentClusterManagerNode();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     /**
-     * Stops any of the current nodes but not the cluster-manager node.
-     *
-     * @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #stopRandomNonClusterManagerNode()}
+     * Replace all nodes by stopping all current node and starting new node.
+     * Used for remote store test cases, where remote state is restored.
      */
-    @Deprecated
-    public synchronized void stopRandomNonMasterNode() throws IOException {
-        stopRandomNonClusterManagerNode();
+    public void resetCluster() {
+        int totalClusterManagerNodes = numClusterManagerNodes();
+        int totalDataNodes = numDataNodes();
+        stopAllNodes();
+        startClusterManagerOnlyNodes(totalClusterManagerNodes);
+        startDataOnlyNodes(totalDataNodes);
     }
 
     private synchronized void startAndPublishNodesAndClients(List<NodeAndClient> nodeAndClients) {
@@ -2103,6 +2064,17 @@ public final class InternalTestCluster extends TestCluster {
     }
 
     /**
+     * Returns the name of all the cluster managers in the cluster
+     */
+    public Set<String> getClusterManagerNames() {
+        return nodes.entrySet()
+            .stream()
+            .filter(entry -> CLUSTER_MANAGER_NODE_PREDICATE.test(entry.getValue()))
+            .map(entry -> entry.getKey())
+            .collect(Collectors.toSet());
+    }
+
+    /**
      * Returns the name of the current cluster-manager node in the cluster.
      */
     public String getClusterManagerName() {
@@ -2123,27 +2095,6 @@ public final class InternalTestCluster extends TestCluster {
         }
     }
 
-    /**
-     * Returns the name of the current cluster-manager node in the cluster.
-     *
-     * @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #getClusterManagerName()}
-     */
-    @Deprecated
-    public String getMasterName() {
-        return getClusterManagerName();
-    }
-
-    /**
-     * Returns the name of the current cluster-manager node in the cluster and executes the request via the node specified
-     * in the viaNode parameter. If viaNode isn't specified a random node will be picked to the send the request to.
-     *
-     * @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #getClusterManagerName(String)}
-     */
-    @Deprecated
-    public String getMasterName(@Nullable String viaNode) {
-        return getClusterManagerName(viaNode);
-    }
-
     synchronized Set<String> allDataNodesButN(int count) {
         final int numNodes = numDataNodes() - count;
         assert size() >= numNodes;
@@ -2158,6 +2109,10 @@ public final class InternalTestCluster extends TestCluster {
             set.add(iterator.next());
         }
         return set;
+    }
+
+    public Set<String> getDataNodeNames() {
+        return allDataNodesButN(0);
     }
 
     /**
@@ -2269,7 +2224,21 @@ public final class InternalTestCluster extends TestCluster {
     /**
      * Starts multiple nodes with the given settings and returns their names
      */
+    public List<String> startNodes(int numOfNodes, Settings settings, Boolean waitForNodeJoin) {
+        return startNodes(waitForNodeJoin, Collections.nCopies(numOfNodes, settings).toArray(new Settings[0]));
+    }
+
+    /**
+     * Starts multiple nodes with the given settings and returns their names
+     */
     public synchronized List<String> startNodes(Settings... extraSettings) {
+        return startNodes(false, extraSettings);
+    }
+
+    /**
+     * Starts multiple nodes with the given settings and returns their names
+     */
+    public synchronized List<String> startNodes(Boolean waitForNodeJoin, Settings... extraSettings) {
         final int newClusterManagerCount = Math.toIntExact(Stream.of(extraSettings).filter(DiscoveryNode::isClusterManagerNode).count());
         final int defaultMinClusterManagerNodes;
         if (autoManageClusterManagerNodes) {
@@ -2321,7 +2290,7 @@ public final class InternalTestCluster extends TestCluster {
             nodes.add(nodeAndClient);
         }
         startAndPublishNodesAndClients(nodes);
-        if (autoManageClusterManagerNodes) {
+        if (autoManageClusterManagerNodes && !waitForNodeJoin) {
             validateClusterFormed();
         }
         return nodes.stream().map(NodeAndClient::getName).collect(Collectors.toList());
@@ -2333,18 +2302,6 @@ public final class InternalTestCluster extends TestCluster {
 
     public List<String> startClusterManagerOnlyNodes(int numNodes, Settings settings) {
         return startNodes(numNodes, Settings.builder().put(onlyRole(settings, DiscoveryNodeRole.CLUSTER_MANAGER_ROLE)).build());
-    }
-
-    /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #startClusterManagerOnlyNodes(int)} */
-    @Deprecated
-    public List<String> startMasterOnlyNodes(int numNodes) {
-        return startClusterManagerOnlyNodes(numNodes);
-    }
-
-    /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #startClusterManagerOnlyNodes(int, Settings)} */
-    @Deprecated
-    public List<String> startMasterOnlyNodes(int numNodes, Settings settings) {
-        return startClusterManagerOnlyNodes(numNodes, settings);
     }
 
     public List<String> startDataAndSearchNodes(int numNodes) {
@@ -2364,6 +2321,10 @@ public final class InternalTestCluster extends TestCluster {
 
     public List<String> startDataOnlyNodes(int numNodes, Settings settings) {
         return startNodes(numNodes, Settings.builder().put(onlyRole(settings, DiscoveryNodeRole.DATA_ROLE)).build());
+    }
+
+    public List<String> startDataOnlyNodes(int numNodes, Settings settings, Boolean ignoreNodeJoin) {
+        return startNodes(numNodes, Settings.builder().put(onlyRole(settings, DiscoveryNodeRole.DATA_ROLE)).build(), ignoreNodeJoin);
     }
 
     public List<String> startSearchOnlyNodes(int numNodes) {
@@ -2390,18 +2351,6 @@ public final class InternalTestCluster extends TestCluster {
     public String startClusterManagerOnlyNode(Settings settings) {
         Settings settings1 = Settings.builder().put(settings).put(NodeRoles.clusterManagerOnlyNode(settings)).build();
         return startNode(settings1);
-    }
-
-    /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #startClusterManagerOnlyNode()} */
-    @Deprecated
-    public String startMasterOnlyNode() {
-        return startClusterManagerOnlyNode();
-    }
-
-    /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #startClusterManagerOnlyNode(Settings)} */
-    @Deprecated
-    public String startMasterOnlyNode(Settings settings) {
-        return startClusterManagerOnlyNode(settings);
     }
 
     public String startDataOnlyNode() {
@@ -2445,12 +2394,6 @@ public final class InternalTestCluster extends TestCluster {
 
     public int numClusterManagerNodes() {
         return filterNodes(nodes, NodeAndClient::isClusterManagerEligible).size();
-    }
-
-    /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #numClusterManagerNodes()} */
-    @Deprecated
-    public int numMasterNodes() {
-        return numClusterManagerNodes();
     }
 
     public void setDisruptionScheme(ServiceDisruptionScheme scheme) {
@@ -2671,6 +2614,17 @@ public final class InternalTestCluster extends TestCluster {
                 CommonStatsFlags flags = new CommonStatsFlags(Flag.FieldData, Flag.QueryCache, Flag.Segments);
                 NodeStats stats = nodeService.stats(
                     flags,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
                     false,
                     false,
                     false,

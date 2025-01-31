@@ -33,6 +33,7 @@ configurations {
 }
 
 dependencies {
+  arm64DockerSource project(path: ":distribution:archives:darwin-arm64-tar", configuration:"default")
   arm64DockerSource project(path: ":distribution:archives:linux-arm64-tar", configuration:"default")
   s390xDockerSource project(path: ":distribution:archives:linux-s390x-tar", configuration:"default")
   ppc64leDockerSource project(path: ":distribution:archives:linux-ppc64le-tar", configuration:"default")
@@ -177,7 +178,7 @@ tasks.named("preProcessFixture").configure {
   }
   doLast {
     // tests expect to have an empty repo
-    project.delete(
+    delete(
       "${buildDir}/repo"
     )
     createAndSetWritable(
@@ -272,8 +273,8 @@ subprojects { Project subProject ->
     }
 
     artifacts.add('default', file(tarFile)) {
-      type 'tar'
-      name artifactName
+      type = 'tar'
+      name = artifactName
       builtBy exportTaskName
     }
 

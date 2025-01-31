@@ -115,11 +115,17 @@ public enum MissingValues {
     public static ValuesSource.Numeric replaceMissing(final ValuesSource.Numeric valuesSource, final Number missing) {
         final boolean missingIsFloat = missing.doubleValue() % 1 != 0;
         final boolean isFloatingPoint = valuesSource.isFloatingPoint() || missingIsFloat;
+        final boolean isBigInteger = valuesSource.isBigInteger() && !isFloatingPoint;
         return new ValuesSource.Numeric() {
 
             @Override
             public boolean isFloatingPoint() {
                 return isFloatingPoint;
+            }
+
+            @Override
+            public boolean isBigInteger() {
+                return isBigInteger;
             }
 
             @Override
@@ -221,6 +227,10 @@ public enum MissingValues {
                 return "anon SortedNumericDoubleValues of [" + super.toString() + "]";
             }
 
+            @Override
+            public int advance(int target) throws IOException {
+                return values.advance(target);
+            }
         };
     }
 
@@ -295,10 +305,10 @@ public enum MissingValues {
                     return values.nextOrd();
                 } else {
                     // we want to return the next missing ord but set this to
-                    // NO_MORE_ORDS so on the next call we indicate there are no
+                    // NO_MORE_DOCS so on the next call we indicate there are no
                     // more values
                     long ordToReturn = nextMissingOrd;
-                    nextMissingOrd = SortedSetDocValues.NO_MORE_ORDS;
+                    nextMissingOrd = SortedSetDocValues.NO_MORE_DOCS;
                     return ordToReturn;
                 }
             }
@@ -358,15 +368,17 @@ public enum MissingValues {
                     final long ord = values.nextOrd();
                     if (ord < insertedOrd) {
                         return ord;
+                    } else if (ord == SortedSetDocValues.NO_MORE_DOCS /* no more docs */) {
+                        return SortedSetDocValues.NO_MORE_DOCS;
                     } else {
                         return ord + 1;
                     }
                 } else {
                     // we want to return the next missing ord but set this to
-                    // NO_MORE_ORDS so on the next call we indicate there are no
+                    // NO_MORE_DOCS so on the next call we indicate there are no
                     // more values
                     long ordToReturn = nextMissingOrd;
-                    nextMissingOrd = SortedSetDocValues.NO_MORE_ORDS;
+                    nextMissingOrd = SortedSetDocValues.NO_MORE_DOCS;
                     return ordToReturn;
                 }
             }

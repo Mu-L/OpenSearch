@@ -68,7 +68,10 @@ public class EngineConfigFactoryTests extends OpenSearchTestCase {
             null,
             null,
             false,
-            new InternalTranslogFactory()
+            () -> Boolean.TRUE,
+            new InternalTranslogFactory(),
+            null,
+            null
         );
 
         assertNotNull(config.getCodec());
@@ -146,7 +149,10 @@ public class EngineConfigFactoryTests extends OpenSearchTestCase {
             null,
             null,
             false,
-            new InternalTranslogFactory()
+            () -> Boolean.TRUE,
+            new InternalTranslogFactory(),
+            null,
+            null
         );
         assertNotNull(config.getCodec());
     }
@@ -174,7 +180,7 @@ public class EngineConfigFactoryTests extends OpenSearchTestCase {
 
         @Override
         public Optional<CodecService> getCustomCodecService(IndexSettings indexSettings) {
-            return Optional.of(new CodecService(null, LogManager.getLogger(getClass())));
+            return Optional.of(new CodecService(null, indexSettings, LogManager.getLogger(getClass())));
         }
 
         @Override
@@ -191,7 +197,7 @@ public class EngineConfigFactoryTests extends OpenSearchTestCase {
 
         @Override
         public Optional<CodecService> getCustomCodecService(IndexSettings indexSettings) {
-            return Optional.of(new CodecService(null, LogManager.getLogger(getClass())));
+            return Optional.of(new CodecService(null, indexSettings, LogManager.getLogger(getClass())));
         }
     }
 
@@ -203,7 +209,9 @@ public class EngineConfigFactoryTests extends OpenSearchTestCase {
 
         @Override
         public Optional<CodecServiceFactory> getCustomCodecServiceFactory(IndexSettings indexSettings) {
-            return Optional.of(config -> new CodecService(config.getMapperService(), LogManager.getLogger(getClass())));
+            return Optional.of(
+                config -> new CodecService(config.getMapperService(), config.getIndexSettings(), LogManager.getLogger(getClass()))
+            );
         }
     }
 

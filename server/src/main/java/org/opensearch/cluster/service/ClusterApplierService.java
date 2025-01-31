@@ -36,13 +36,13 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.opensearch.cluster.ClusterChangedEvent;
+import org.opensearch.cluster.ClusterManagerMetrics;
 import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.ClusterStateApplier;
 import org.opensearch.cluster.ClusterStateListener;
 import org.opensearch.cluster.ClusterStateObserver;
 import org.opensearch.cluster.ClusterStateTaskConfig;
 import org.opensearch.cluster.LocalNodeClusterManagerListener;
-import org.opensearch.cluster.LocalNodeMasterListener;
 import org.opensearch.cluster.NodeConnectionsService;
 import org.opensearch.cluster.TimeoutClusterStateListener;
 import org.opensearch.cluster.metadata.ProcessClusterEventTimeoutException;
@@ -50,16 +50,20 @@ import org.opensearch.cluster.node.DiscoveryNodes;
 import org.opensearch.common.Nullable;
 import org.opensearch.common.Priority;
 import org.opensearch.common.StopWatch;
-import org.opensearch.common.component.AbstractLifecycleComponent;
-import org.opensearch.common.lease.Releasable;
+import org.opensearch.common.StopWatch.TimingHandle;
+import org.opensearch.common.annotation.PublicApi;
+import org.opensearch.common.lifecycle.AbstractLifecycleComponent;
 import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.common.util.concurrent.OpenSearchExecutors;
-import org.opensearch.common.util.concurrent.OpenSearchRejectedExecutionException;
 import org.opensearch.common.util.concurrent.PrioritizedOpenSearchThreadPoolExecutor;
 import org.opensearch.common.util.concurrent.ThreadContext;
+import org.opensearch.common.util.concurrent.ThreadContextAccess;
+import org.opensearch.core.concurrency.OpenSearchRejectedExecutionException;
+import org.opensearch.telemetry.metrics.noop.NoopMetricsRegistry;
+import org.opensearch.telemetry.metrics.tags.Tags;
 import org.opensearch.threadpool.Scheduler;
 import org.opensearch.threadpool.ThreadPool;
 
@@ -67,6 +71,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -82,8 +87,9 @@ import static org.opensearch.common.util.concurrent.OpenSearchExecutors.daemonTh
 /**
  * Service that provides callbacks when cluster state changes
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class ClusterApplierService extends AbstractLifecycleComponent implements ClusterApplier {
     private static final Logger logger = LogManager.getLogger(ClusterApplierService.class);
 
@@ -112,14 +118,25 @@ public class ClusterApplierService extends AbstractLifecycleComponent implements
 
     private final Collection<ClusterStateListener> clusterStateListeners = new CopyOnWriteArrayList<>();
     private final Map<TimeoutClusterStateListener, NotifyTimeout> timeoutClusterStateListeners = new ConcurrentHashMap<>();
-
+    private final AtomicReference<ClusterState> preCommitState = new AtomicReference<>(); // last state which is yet to be applied
     private final AtomicReference<ClusterState> state; // last applied state
 
     private final String nodeName;
 
     private NodeConnectionsService nodeConnectionsService;
+    private final ClusterManagerMetrics clusterManagerMetrics;
 
     public ClusterApplierService(String nodeName, Settings settings, ClusterSettings clusterSettings, ThreadPool threadPool) {
+        this(nodeName, settings, clusterSettings, threadPool, new ClusterManagerMetrics(NoopMetricsRegistry.INSTANCE));
+    }
+
+    public ClusterApplierService(
+        String nodeName,
+        Settings settings,
+        ClusterSettings clusterSettings,
+        ThreadPool threadPool,
+        ClusterManagerMetrics clusterManagerMetrics
+    ) {
         this.clusterSettings = clusterSettings;
         this.threadPool = threadPool;
         this.state = new AtomicReference<>();
@@ -130,6 +147,7 @@ public class ClusterApplierService extends AbstractLifecycleComponent implements
             CLUSTER_SERVICE_SLOW_TASK_LOGGING_THRESHOLD_SETTING,
             this::setSlowTaskLoggingThreshold
         );
+        this.clusterManagerMetrics = clusterManagerMetrics;
     }
 
     private void setSlowTaskLoggingThreshold(TimeValue slowTaskLoggingThreshold) {
@@ -217,6 +235,13 @@ public class ClusterApplierService extends AbstractLifecycleComponent implements
     /**
      * Returns true if the appliedClusterState is not null
      */
+    public boolean isStateInitialised() {
+        return this.state.get() != null;
+    }
+
+    /**
+     * Returns true if the appliedClusterState is not null
+     */
     public boolean isInitialClusterStateSet() {
         return Objects.nonNull(this.state.get());
     }
@@ -283,18 +308,9 @@ public class ClusterApplierService extends AbstractLifecycleComponent implements
     }
 
     /**
-     * Add a listener for on/off local node cluster-manager events
-     * @deprecated As of 2.1, because supporting inclusive language, replaced by {@link #addLocalNodeClusterManagerListener}
-     */
-    @Deprecated
-    public void addLocalNodeMasterListener(LocalNodeMasterListener listener) {
-        addLocalNodeClusterManagerListener(listener);
-    }
-
-    /**
      * Adds a cluster state listener that is expected to be removed during a short period of time.
      * If provided, the listener will be notified once a specific time has elapsed.
-     *
+     * <p>
      * NOTE: the listener is not removed on timeout. This is the responsibility of the caller.
      */
     public void addTimeoutListener(@Nullable final TimeValue timeout, final TimeoutClusterStateListener listener) {
@@ -378,7 +394,7 @@ public class ClusterApplierService extends AbstractLifecycleComponent implements
         final ThreadContext threadContext = threadPool.getThreadContext();
         final Supplier<ThreadContext.StoredContext> supplier = threadContext.newRestorableContext(true);
         try (ThreadContext.StoredContext ignore = threadContext.stashContext()) {
-            threadContext.markAsSystemContext();
+            ThreadContextAccess.doPrivilegedVoid(threadContext::markAsSystemContext);
             final UpdateTask updateTask = new UpdateTask(
                 config.priority(),
                 source,
@@ -444,7 +460,7 @@ public class ClusterApplierService extends AbstractLifecycleComponent implements
         final StopWatch stopWatch = new StopWatch();
         final ClusterState newClusterState;
         try {
-            try (Releasable ignored = stopWatch.timing("running task [" + task.source + ']')) {
+            try (TimingHandle ignored = stopWatch.timing("running task [" + task.source + ']')) {
                 newClusterState = task.apply(previousClusterState);
             }
         } catch (Exception e) {
@@ -483,6 +499,7 @@ public class ClusterApplierService extends AbstractLifecycleComponent implements
             try {
                 applyChanges(task, previousClusterState, newClusterState, stopWatch);
                 TimeValue executionTime = TimeValue.timeValueMillis(Math.max(0, currentTimeInMillis() - startTimeMS));
+                // At this point, cluster state appliers and listeners are completed
                 logger.debug(
                     "processing [{}]: took [{}] done applying updated cluster state (version: {}, uuid: {})",
                     task.source,
@@ -491,6 +508,7 @@ public class ClusterApplierService extends AbstractLifecycleComponent implements
                     newClusterState.stateUUID()
                 );
                 warnAboutSlowTaskIfNeeded(executionTime, task.source, stopWatch);
+                // Then we call the ClusterApplyListener of the task
                 task.listener.onSuccess(task.source);
             } catch (Exception e) {
                 TimeValue executionTime = TimeValue.timeValueMillis(Math.max(0, currentTimeInMillis() - startTimeMS));
@@ -544,7 +562,7 @@ public class ClusterApplierService extends AbstractLifecycleComponent implements
         }
 
         logger.trace("connecting to nodes of cluster state with version {}", newClusterState.version());
-        try (Releasable ignored = stopWatch.timing("connecting to new nodes")) {
+        try (TimingHandle ignored = stopWatch.timing("connecting to new nodes")) {
             connectToNodesAndWait(newClusterState);
         }
 
@@ -552,13 +570,14 @@ public class ClusterApplierService extends AbstractLifecycleComponent implements
         if (clusterChangedEvent.state().blocks().disableStatePersistence() == false && clusterChangedEvent.metadataChanged()) {
             logger.debug("applying settings from cluster state with version {}", newClusterState.version());
             final Settings incomingSettings = clusterChangedEvent.state().metadata().settings();
-            try (Releasable ignored = stopWatch.timing("applying settings")) {
+            try (TimingHandle ignored = stopWatch.timing("applying settings")) {
                 clusterSettings.applySettings(incomingSettings);
             }
         }
 
         logger.debug("apply cluster state with version {}", newClusterState.version());
         callClusterStateAppliers(clusterChangedEvent, stopWatch);
+        logger.debug("completed calling appliers of cluster state for version {}", newClusterState.version());
 
         nodeConnectionsService.disconnectFromNodesExcept(newClusterState.nodes());
 
@@ -575,6 +594,7 @@ public class ClusterApplierService extends AbstractLifecycleComponent implements
         state.set(newClusterState);
 
         callClusterStateListeners(clusterChangedEvent, stopWatch);
+        logger.debug("completed calling listeners of cluster state for version {}", newClusterState.version());
     }
 
     protected void connectToNodesAndWait(ClusterState newClusterState) {
@@ -595,15 +615,21 @@ public class ClusterApplierService extends AbstractLifecycleComponent implements
         callClusterStateAppliers(clusterChangedEvent, stopWatch, lowPriorityStateAppliers);
     }
 
-    private static void callClusterStateAppliers(
+    private void callClusterStateAppliers(
         ClusterChangedEvent clusterChangedEvent,
         StopWatch stopWatch,
         Collection<ClusterStateApplier> clusterStateAppliers
     ) {
         for (ClusterStateApplier applier : clusterStateAppliers) {
             logger.trace("calling [{}] with change to version [{}]", applier, clusterChangedEvent.state().version());
-            try (Releasable ignored = stopWatch.timing("running applier [" + applier + "]")) {
+            try (TimingHandle ignored = stopWatch.timing("running applier [" + applier + "]")) {
+                long applierStartTimeNS = System.nanoTime();
                 applier.applyClusterState(clusterChangedEvent);
+                clusterManagerMetrics.recordLatency(
+                    clusterManagerMetrics.clusterStateAppliersHistogram,
+                    (double) Math.max(0, TimeValue.nsecToMSec(System.nanoTime() - applierStartTimeNS)),
+                    Optional.of(Tags.create().addTag("Operation", applier.getClass().getSimpleName()))
+                );
             }
         }
     }
@@ -621,8 +647,14 @@ public class ClusterApplierService extends AbstractLifecycleComponent implements
         for (ClusterStateListener listener : listeners) {
             try {
                 logger.trace("calling [{}] with change to version [{}]", listener, clusterChangedEvent.state().version());
-                try (Releasable ignored = stopWatch.timing("notifying listener [" + listener + "]")) {
+                try (TimingHandle ignored = stopWatch.timing("notifying listener [" + listener + "]")) {
+                    long listenerStartTimeNS = System.nanoTime();
                     listener.clusterChanged(clusterChangedEvent);
+                    clusterManagerMetrics.recordLatency(
+                        clusterManagerMetrics.clusterStateListenersHistogram,
+                        (double) Math.max(0, TimeValue.nsecToMSec(System.nanoTime() - listenerStartTimeNS)),
+                        Optional.of(Tags.create().addTag("Operation", listener.getClass().getSimpleName()))
+                    );
                 }
             } catch (Exception ex) {
                 logger.warn("failed to notify ClusterStateListener", ex);
@@ -719,4 +751,18 @@ public class ClusterApplierService extends AbstractLifecycleComponent implements
     protected boolean applicationMayFail() {
         return false;
     }
+
+    /**
+     * Pre-commit State of the cluster-applier
+     * @return ClusterState
+     */
+    public ClusterState preCommitState() {
+        return preCommitState.get();
+    }
+
+    @Override
+    public void setPreCommitState(ClusterState clusterState) {
+        preCommitState.set(clusterState);
+    }
+
 }

@@ -35,16 +35,18 @@ package org.opensearch.action.admin.cluster.snapshots.status;
 import org.opensearch.cluster.SnapshotsInProgress;
 import org.opensearch.cluster.SnapshotsInProgress.State;
 import org.opensearch.common.Nullable;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.Strings;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.io.stream.Writeable;
-import org.opensearch.common.xcontent.ConstructingObjectParser;
-import org.opensearch.common.xcontent.ObjectParser;
-import org.opensearch.common.xcontent.ToXContentObject;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.common.annotation.PublicApi;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.xcontent.ConstructingObjectParser;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.ObjectParser;
+import org.opensearch.core.xcontent.ToXContentObject;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.snapshots.Snapshot;
 import org.opensearch.snapshots.SnapshotId;
 
@@ -61,14 +63,15 @@ import java.util.Set;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.emptyMap;
 import static java.util.Collections.unmodifiableMap;
-import static org.opensearch.common.xcontent.ConstructingObjectParser.constructorArg;
-import static org.opensearch.common.xcontent.ConstructingObjectParser.optionalConstructorArg;
+import static org.opensearch.core.xcontent.ConstructingObjectParser.constructorArg;
+import static org.opensearch.core.xcontent.ConstructingObjectParser.optionalConstructorArg;
 
 /**
  * Status of a snapshot
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class SnapshotStatus implements ToXContentObject, Writeable {
 
     private final Snapshot snapshot;
@@ -205,7 +208,7 @@ public class SnapshotStatus implements ToXContentObject, Writeable {
 
     @Override
     public String toString() {
-        return Strings.toString(this, true, false);
+        return Strings.toString(MediaTypeRegistry.JSON, this, true, false);
     }
 
     /**

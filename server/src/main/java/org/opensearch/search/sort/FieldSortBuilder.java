@@ -34,22 +34,24 @@ package org.opensearch.search.sort;
 
 import org.apache.lucene.document.LongPoint;
 import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.MultiTerms;
 import org.apache.lucene.index.PointValues;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.search.SortField;
 import org.opensearch.OpenSearchParseException;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.ParsingException;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
 import org.opensearch.common.logging.DeprecationLogger;
 import org.opensearch.common.time.DateMathParser;
 import org.opensearch.common.time.DateUtils;
-import org.opensearch.common.xcontent.ObjectParser;
-import org.opensearch.common.xcontent.ObjectParser.ValueType;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.ParsingException;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.xcontent.ObjectParser;
+import org.opensearch.core.xcontent.ObjectParser.ValueType;
+import org.opensearch.core.xcontent.XContent;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.IndexSortConfig;
 import org.opensearch.index.fielddata.IndexFieldData;
 import org.opensearch.index.fielddata.IndexFieldData.XFieldComparatorSource.Nested;
@@ -63,12 +65,14 @@ import org.opensearch.index.query.QueryBuilder;
 import org.opensearch.index.query.QueryRewriteContext;
 import org.opensearch.index.query.QueryShardContext;
 import org.opensearch.index.query.QueryShardException;
+import org.opensearch.index.query.WithFieldName;
 import org.opensearch.search.DocValueFormat;
 import org.opensearch.search.MultiValueMode;
 import org.opensearch.search.SearchSortValuesAndFormats;
 import org.opensearch.search.builder.SearchSourceBuilder;
 
 import java.io.IOException;
+import java.math.BigInteger;
 import java.util.Collections;
 import java.util.Locale;
 import java.util.Objects;
@@ -83,7 +87,7 @@ import static org.opensearch.search.sort.NestedSortBuilder.NESTED_FIELD;
  *
  * @opensearch.internal
  */
-public class FieldSortBuilder extends SortBuilder<FieldSortBuilder> {
+public class FieldSortBuilder extends SortBuilder<FieldSortBuilder> implements WithFieldName {
     private static final DeprecationLogger deprecationLogger = DeprecationLogger.getLogger(FieldSortBuilder.class);
 
     public static final String NAME = "field_sort";
@@ -179,6 +183,11 @@ public class FieldSortBuilder extends SortBuilder<FieldSortBuilder> {
     /** Returns the document field this sort should be based on. */
     public String getFieldName() {
         return this.fieldName;
+    }
+
+    @Override
+    public String fieldName() {
+        return getFieldName();
     }
 
     /**
@@ -386,6 +395,8 @@ public class FieldSortBuilder extends SortBuilder<FieldSortBuilder> {
                 return NumericType.DATE;
             case "date_nanos":
                 return NumericType.DATE_NANOSECONDS;
+            case "unsigned_long":
+                return NumericType.UNSIGNED_LONG;
 
             default:
                 throw new IllegalArgumentException(
@@ -601,17 +612,39 @@ public class FieldSortBuilder extends SortBuilder<FieldSortBuilder> {
     }
 
     /**
-     * Return the {@link MinAndMax} indexed value from the provided {@link FieldSortBuilder} or <code>null</code> if unknown.
+     * Return the {@link MinAndMax} indexed value for shard from the provided {@link FieldSortBuilder} or <code>null</code> if unknown.
      * The value can be extracted on non-nested indexed mapped fields of type keyword, numeric or date, other fields
      * and configurations return <code>null</code>.
      */
     public static MinAndMax<?> getMinMaxOrNull(QueryShardContext context, FieldSortBuilder sortBuilder) throws IOException {
-        SortAndFormats sort = SortBuilder.buildSort(Collections.singletonList(sortBuilder), context).get();
+        final SortAndFormats sort = SortBuilder.buildSort(Collections.singletonList(sortBuilder), context).get();
+        return getMinMaxOrNullInternal(context.getIndexReader(), context, sortBuilder, sort);
+    }
+
+    /**
+     * Return the {@link MinAndMax} indexed value for segment from the provided {@link FieldSortBuilder} or <code>null</code> if unknown.
+     * The value can be extracted on non-nested indexed mapped fields of type keyword, numeric or date, other fields
+     * and configurations return <code>null</code>.
+     */
+    public static MinAndMax<?> getMinMaxOrNullForSegment(
+        QueryShardContext context,
+        LeafReaderContext ctx,
+        FieldSortBuilder sortBuilder,
+        SortAndFormats sort
+    ) throws IOException {
+        return getMinMaxOrNullInternal(ctx.reader(), context, sortBuilder, sort);
+    }
+
+    private static MinAndMax<?> getMinMaxOrNullInternal(
+        IndexReader reader,
+        QueryShardContext context,
+        FieldSortBuilder sortBuilder,
+        SortAndFormats sort
+    ) throws IOException {
         SortField sortField = sort.sort.getSort()[0];
         if (sortField.getField() == null) {
             return null;
         }
-        IndexReader reader = context.getIndexReader();
         MappedFieldType fieldType = context.fieldMapper(sortField.getField());
         if (reader == null || (fieldType == null || fieldType.isSearchable() == false)) {
             return null;
@@ -652,7 +685,12 @@ public class FieldSortBuilder extends SortBuilder<FieldSortBuilder> {
             Number maxPoint = numberFieldType.parsePoint(PointValues.getMaxPackedValue(reader, fieldName));
             switch (IndexSortConfig.getSortFieldType(sortField)) {
                 case LONG:
-                    return new MinAndMax<>(minPoint.longValue(), maxPoint.longValue());
+                    if (numberFieldType.numericType() == NumericType.UNSIGNED_LONG) {
+                        // The min and max are expected to be BigInteger numbers
+                        return new MinAndMax<>((BigInteger) minPoint, (BigInteger) maxPoint);
+                    } else {
+                        return new MinAndMax<>(minPoint.longValue(), maxPoint.longValue());
+                    }
                 case INT:
                     return new MinAndMax<>(minPoint.intValue(), maxPoint.intValue());
                 case DOUBLE:
@@ -739,7 +777,7 @@ public class FieldSortBuilder extends SortBuilder<FieldSortBuilder> {
 
     /**
      * Creates a new {@link FieldSortBuilder} from the query held by the {@link XContentParser} in
-     * {@link org.opensearch.common.xcontent.XContent} format.
+     * {@link XContent} format.
      *
      * @param parser the input parser. The state on the parser contained in this context will be changed as a side effect of this
      *        method call

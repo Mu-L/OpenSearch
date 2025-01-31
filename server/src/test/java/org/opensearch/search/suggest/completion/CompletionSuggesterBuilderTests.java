@@ -33,9 +33,9 @@
 package org.opensearch.search.suggest.completion;
 
 import org.apache.lucene.analysis.core.SimpleAnalyzer;
-import org.opensearch.common.bytes.BytesReference;
 import org.opensearch.common.unit.Fuzziness;
-import org.opensearch.common.xcontent.ToXContent;
+import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.xcontent.ToXContent;
 import org.opensearch.index.analysis.AnalyzerScope;
 import org.opensearch.index.analysis.NamedAnalyzer;
 import org.opensearch.index.mapper.CompletionFieldMapper.CompletionFieldType;

@@ -2,13 +2,12 @@
   - [Getting Started](#getting-started)
     - [Git Clone OpenSearch Repo](#git-clone-opensearch-repo)
     - [Install Prerequisites](#install-prerequisites)
-      - [JDK 11](#jdk-11)
-      - [JDK 14](#jdk-14)
-      - [JDK 17](#jdk-17)
+      - [JDK](#jdk)
       - [Custom Runtime JDK](#custom-runtime-jdk)
       - [Windows](#windows)
       - [Docker](#docker)
     - [Build](#build)
+      - [Generated Code](#generated-code)
     - [Run Tests](#run-tests)
     - [Run OpenSearch](#run-opensearch)
   - [Use an Editor](#use-an-editor)
@@ -26,6 +25,7 @@
     - [`server`](#server)
     - [`test`](#test)
   - [Java Language Formatting Guidelines](#java-language-formatting-guidelines)
+  - [Adding Dependencies](#adding-dependencies)
     - [Editor / IDE Support](#editor--ide-support)
     - [Formatting Failures](#formatting-failures)
   - [Gradle Build](#gradle-build)
@@ -39,7 +39,7 @@
       - [Distribution Download Plugin](#distribution-download-plugin)
     - [Creating fat-JAR of a Module](#creating-fat-jar-of-a-module)
   - [Components](#components)
-    - [Build libraries & interfaces](#build-libraries--interfaces)
+    - [Build Libraries & Interfaces](#build-libraries--interfaces)
     - [Clients & Libraries](#clients--libraries)
     - [Plugins](#plugins-1)
     - [Indexing & Search](#indexing--search)
@@ -50,10 +50,17 @@
       - [Installation](#installation)
       - [Configuration](#configuration)
     - [Submitting Changes](#submitting-changes)
+    - [Backwards Compatibility](#backwards-compatibility)
+      - [Data](#data)
+      - [Developer API](#developer-api)
+      - [User API](#user-api)
+      - [Experimental Development](#experimental-development)
+      - [API Compatibility Checks](#api-compatibility-checks)
     - [Backports](#backports)
     - [LineLint](#linelint)
     - [Lucene Snapshots](#lucene-snapshots)
     - [Flaky Tests](#flaky-tests)
+    - [Gradle Check Metrics Dashboard](#gradle-check-metrics-dashboard)
 
 # Developer Guide
 
@@ -67,35 +74,24 @@ Fork [opensearch-project/OpenSearch](https://github.com/opensearch-project/OpenS
 
 ### Install Prerequisites
 
-#### JDK 11
+#### JDK
 
-OpenSearch builds using Java 11 at a minimum, using the Adoptium distribution. This means you must have a JDK 11 installed with the environment variable `JAVA_HOME` referencing the path to Java home for your JDK 11 installation, e.g. `JAVA_HOME=/usr/lib/jvm/jdk-11`. This is configured in [buildSrc/build.gradle](buildSrc/build.gradle) and [distribution/tools/java-version-checker/build.gradle](distribution/tools/java-version-checker/build.gradle).
+OpenSearch recommends building with the [Temurin/Adoptium](https://adoptium.net/temurin/releases/) distribution. JDK 11 is the minimum supported, and JDK-23 is the newest supported. You must have a supported JDK installed with the environment variable `JAVA_HOME` referencing the path to Java home for your JDK installation, e.g. `JAVA_HOME=/usr/lib/jvm/jdk-21`. 
 
-```
-allprojects {
-  targetCompatibility = JavaVersion.VERSION_11
-  sourceCompatibility = JavaVersion.VERSION_11
-}
-```
+Download Java 11 from [here](https://adoptium.net/releases.html?variant=openjdk11). 
+
+
+In addition, certain backward compatibility tests check out and compile the previous major version of OpenSearch, and therefore require installing [JDK 11](https://adoptium.net/temurin/releases/?version=11) and [JDK 17](https://adoptium.net/temurin/releases/?version=17) and setting the `JAVA11_HOME` and `JAVA17_HOME` environment variables. More to that, since 8.10 release, Gradle has deprecated the usage of the any JDKs below JDK-16. For smooth development experience, the recommendation is to install at least [JDK 17](https://adoptium.net/temurin/releases/?version=17) or [JDK 21](https://adoptium.net/temurin/releases/?version=21). If you still want to build with JDK-11 only, please add `-Dorg.gradle.warning.mode=none` when invoking any Gradle build task from command line, for example:
 
 ```
-sourceCompatibility = JavaVersion.VERSION_11
-targetCompatibility = JavaVersion.VERSION_11
+./gradlew check -Dorg.gradle.warning.mode=none
 ```
 
-Download Java 11 from [here](https://adoptium.net/releases.html?variant=openjdk11).
-
-#### JDK 14
-
-To run the full suite of tests, download and install [JDK 14](https://jdk.java.net/archive/) and set `JAVA11_HOME`, and `JAVA14_HOME`. They are required by the [backwards compatibility test](./TESTING.md#testing-backwards-compatibility).
-
-#### JDK 17
-
-By default, the test tasks use bundled JDK runtime, configured in [buildSrc/version.properties](buildSrc/version.properties), and set to JDK 17 (LTS).
+By default, the test tasks use bundled JDK runtime, configured in version catalog [gradle/libs.versions.toml](gradle/libs.versions.toml), and set to JDK 23 (non-LTS).
 
 ```
 bundled_jdk_vendor = adoptium
-bundled_jdk = 17.0.2+8
+bundled_jdk = 23.0.1+11
 ```
 
 #### Custom Runtime JDK
@@ -127,6 +123,17 @@ To build a distribution to run on your local platform, run:
 ```
 
 All distributions built will be under `distributions/archives`.
+
+#### Generated Code
+
+OpenSearch uses code generators like [Protobuf](https://protobuf.dev/).
+OpenSearch build system already takes a dependency of generating code from protobuf, incase you run into compilation errors, run:
+
+```
+./gradlew generateProto
+```
+
+Generated code in OpenSearch is used to establish cross version compatibility communication for API contracts within OpenSearch.
 
 ### Run Tests
 
@@ -163,6 +170,12 @@ Run OpenSearch using `gradlew run`.
 
 ```
 ./gradlew run
+```
+
+[Plugins](plugins/) may be installed by passing a `-PinstalledPlugins` property:
+
+```bash
+./gradlew run -PinstalledPlugins="['plugin1', 'plugin2']"
 ```
 
 That will build OpenSearch and start it, writing its log above Gradle's status message. We log a lot of stuff on startup, specifically these lines tell you that OpenSearch is ready.
@@ -246,7 +259,10 @@ This repository is split into many top level directories. The most important one
 
 ### `distribution`
 
-Builds our tar and zip archives and our rpm and deb packages.
+Builds our tar and zip archives and our rpm and deb packages. There are several flavors of the distributions, with the classifier included in the name of the final deliverable (archive or package):
+ - default (no classifier), the distribution with bundled JDK
+ - `-no-jdk-` - the distribution without bundled JDK/JRE, assumes the JDK/JRE is going to be pre-installed on the target systems
+ - `-jre-` - the distribution bundled with JRE (smaller footprint), supported as experimental feature for some platforms
 
 ### `libs`
 
@@ -321,7 +337,19 @@ Please follow these formatting guidelines:
 * Wildcard imports (`import foo.bar.baz.*`) are forbidden and will cause the build to fail.
 * If *absolutely* necessary, you can disable formatting for regions of code with the `// tag::NAME` and `// end::NAME` directives, but note that these are intended for use in documentation, so please make it clear what you have done, and only do this where the benefit clearly outweighs the decrease in consistency.
 * Note that JavaDoc and block comments i.e. `/* ... */` are not formatted, but line comments i.e `// ...` are.
-* There is an implicit rule that negative boolean expressions should use the form `foo == false` instead of `!foo` for better readability of the code. While this isn't strictly enforced, if might get called out in PR reviews as something to change.
+* There is an implicit rule that negative boolean expressions should use the form `foo == false` instead of `!foo` for better readability of the code. While this isn't strictly enforced, it might get called out in PR reviews as something to change.
+
+## Adding Dependencies
+
+When adding a new dependency or removing an existing dependency via any `build.gradle` (that are not in the test scope), update the dependency LICENSE and library SHAs.
+
+For example, after adding `api "org.slf4j:slf4j-api:${versions.slf4j}"` to [plugins/discovery-ec2/build.gradle](plugins/discovery-ec2/build.gradle), copy the library `LICENSE.txt` and `NOTICE.txt` to `plugins/discovery-ec2/licenses/slf4j-api-LICENSE.txt` and `plugins/discovery-ec2/licenses/slf4j-api-NOTICE.txt`, then run the following to generate `plugins/discovery-ec2/licenses/slf4j-api-1.7.36.jar.sha1`.
+
+```
+./gradlew :plugins:discovery-ec2:updateSHAs
+```
+
+Ensure that `./gradlew :plugins:discovery-ec2:check` passes before submitting changes.
 
 ### Editor / IDE Support
 
@@ -382,7 +410,7 @@ The Distribution Download plugin downloads the latest version of OpenSearch by d
 
 A fat-JAR (or an uber-JAR) is the JAR, which contains classes from all the libraries, on which your project depends and, of course, the classes of current project.
 
-There might be cases where a developer would like to add some custom logic to the code of a module (or multiple modules) and generate a fat-JAR that can be directly used by the dependency management tool. For example, in [#3665](https://github.com/opensearch-project/OpenSearch/pull/3665) a developer wanted to provide a tentative patch as a fat-JAR to a consumer for changes made in the high level REST client. 
+There might be cases where a developer would like to add some custom logic to the code of a module (or multiple modules) and generate a fat-JAR that can be directly used by the dependency management tool. For example, in [#3665](https://github.com/opensearch-project/OpenSearch/pull/3665) a developer wanted to provide a tentative patch as a fat-JAR to a consumer for changes made in the high level REST client.
 
 Use [Gradle Shadow plugin](https://imperceptiblethoughts.com/shadow/).
 Add the following to the `build.gradle` file of the module for which you want to create the fat-JAR, e.g. `client/rest-high-level/build.gradle`:
@@ -400,7 +428,7 @@ This will generate a fat-JAR in the `build/distributions` folder of the module, 
 
 You can further customize your fat-JAR by customising the plugin, More information about shadow plugin can be found [here](https://imperceptiblethoughts.com/shadow/).
 
-To use the generated JAR, install the JAR locally, e.g. 
+To use the generated JAR, install the JAR locally, e.g.
 ```
 mvn install:install-file -Dfile=src/main/resources/opensearch-rest-high-level-client-1.4.0-SNAPSHOT.jar -DgroupId=org.opensearch.client -DartifactId=opensearch-rest-high-level-client -Dversion=1.4.0-SNAPSHOT -Dpackaging=jar -DgeneratePom=true
 ```
@@ -419,7 +447,7 @@ Refer the installed JAR as any other maven artifact, e.g.
 
 As you work in the OpenSearch repo you may notice issues getting labeled with component labels.  It's a housekeeping task to help group together similar pieces of work.  You can pretty much ignore it, but if you're curious, here's what the different labels mean:
 
-### Build libraries & interfaces
+### Build Libraries & Interfaces
 
 Tasks to make sure the build tasks are useful and packaging and distribution are easy.
 
@@ -431,7 +459,6 @@ Includes:
 - Versioning interfaces
 - Compatibility
 - Javadoc enforcement
-
 
 ### Clients & Libraries
 
@@ -494,6 +521,7 @@ Includes:
 Security is our top priority. Avoid checking in credentials.
 
 #### Installation
+
 Install [awslabs/git-secrets](https://github.com/awslabs/git-secrets) by running the following commands.
 ```
 git clone https://github.com/awslabs/git-secrets.git
@@ -502,6 +530,7 @@ make install
 ```
 
 #### Configuration
+
 You can configure git secrets per repository, you need to change the directory to the root of the repository and run the following command.
 ```
 git secrets --install
@@ -517,6 +546,69 @@ git secrets --register-aws
 ### Submitting Changes
 
 See [CONTRIBUTING](CONTRIBUTING.md).
+
+### Backwards Compatibility
+
+OpenSearch strives for a smooth and easy upgrade experience that is resilient to data loss and corruption while minimizing downtime and ensuring integration with
+external systems does not unexpectedly break.
+
+To provide these guarantees each version must be designed and developed with [forward compatibility](https://en.wikipedia.org/wiki/Forward_compatibility) in mind.
+OpenSearch addresses backward and forward compatibility at three different levels: 1. Data, 2. Developer API, 3. User API. These levels and the developer mechanisms
+to ensure backwards compatibility are provided below.
+
+#### Data
+
+The data level consists of index and application data file formats. OpenSearch guarantees file formats and indexes are compatible only back to the first release of
+the previous major version. If on disk formats or encodings need to be changed (including index data, cluster state, or any other persisted data) developers must
+use Version checks accordingly (e.g., `Version.onOrAfter`, `Version.before`) to guarantee backwards compatibility.
+
+#### Developer API
+
+The Developer API consists of interfaces and foundation software implementations that enable external users to develop new OpenSearch features. This includes obvious
+components such as the Plugin and Extension frameworks and less obvious components such as REST Action Handlers. When developing a new feature of OpenSearch it is
+important to explicitly mark which implementation components may, or may not, be extended by external implementations. For example, all new API classes with
+`@PublicApi` annotation (or documented as `@opensearch.api`) signal that the new component may be extended by an external implementation and therefore provide
+backwards compatibility guarantees. Similarly, any class explicitly marked with the `@InternalApi` (or documented as `@opensearch.internal`) annotation, or not
+explicitly marked by an annotation should not be extended by external implementation components as it does not guarantee backwards compatibility and may change at
+any time. The `@DeprecatedApi` annotation could also be added to any classes annotated with `@PublicApi` (or documented as `@opensearch.api`) or their methods that
+are either changed (with replacement) or planned to be removed across major versions.
+
+The APIs which are designated to be public but have not been stabilized yet should be marked with `@ExperimentalApi` (or documented as `@opensearch.experimental`)
+annotation. The presence of this annotation signals that API may change at any time (major, minor or even patch releases). In general, the classes annotated with
+`@PublicApi` may expose other classes or methods annotated with `@ExperimentalApi`, in such cases the backward compatibility guarantees would not apply to latter
+(see please [Experimental Development](#experimental-development) for more details).
+
+#### User API
+
+The User API consists of integration specifications (e.g., [Query Domain Specific Language](https://opensearch.org/docs/latest/opensearch/query-dsl/index/),
+[field mappings](https://opensearch.org/docs/latest/opensearch/mappings/)) and endpoints (e.g., [`_search`](https://opensearch.org/docs/latest/api-reference/search/),
+[`_cat`](https://opensearch.org/docs/latest/api-reference/cat/index/)) users rely on to integrate and use OpenSearch. Backwards compatibility is critical to the
+User API, therefore OpenSearch commits to using [semantic versioning](https://opensearch.org/blog/what-is-semver/) for all User facing APIs. To support this
+developers must leverage `Version` checks for any user facing endpoints or API specifications that change across minor versions. Developers must also inform
+users of any changes by adding the `>breaking` label on Pull Requests, adding an entry to the [CHANGELOG](https://github.com/opensearch-project/OpenSearch/blob/main/CHANGELOG.md)
+and a log message to the OpenSearch deprecation log files using the `DeprecationLogger`.
+
+#### Experimental Development
+
+Rapidly developing new features often benefit from several release cycles before committing to an official and long term supported (LTS) API. To enable this cycle OpenSearch
+uses an Experimental Development process leveraging [Feature Flags](https://featureflags.io/feature-flags/). This allows a feature to be developed using the same process as
+a LTS feature but with additional guard rails and communication mechanisms to signal to the users and development community the feature is not yet stable, may change in a future
+release, or be removed altogether. Any Developer or User APIs implemented along with the experimental feature should be marked with `@ExperimentalApi` (or documented as
+`@opensearch.experimental`) annotation to signal the implementation is not subject to LTS and does not follow backwards compatibility guidelines.
+
+#### API Compatibility Checks
+
+The compatibility checks for public APIs are performed using [japicmp](https://siom79.github.io/japicmp/) and are available as separate Gradle tasks (those are run on demand at the moment):
+
+```
+./gradlew japicmp
+```
+
+By default, the API compatibility checks are run against the latest released version of the OpenSearch, however the target version to compare to could be provided using system property during the build, fe.:
+
+```
+./gradlew japicmp  -Djapicmp.compare.version=2.14.0-SNAPSHOT
+```
 
 ### Backports
 
@@ -540,18 +632,25 @@ Pass a list of files or directories to limit your search.
 
 ### Lucene Snapshots
 
-The Github workflow in [lucene-snapshots.yml](.github/workflows/lucene-snapshots.yml) is a Github worfklow executable by maintainers to build a top-down snapshot build of lucene.
+The Github workflow in [lucene-snapshots.yml](.github/workflows/lucene-snapshots.yml) is a GitHub workflow executable by maintainers to build a top-down snapshot build of Lucene.
 These snapshots are available to test compatibility with upcoming changes to Lucene by updating the version at [version.properties](buildsrc/version.properties) with the `version-snapshot-sha` version. Example: `lucene = 10.0.0-snapshot-2e941fc`.
+Note that these snapshots do not follow the Maven [naming convention](https://maven.apache.org/guides/getting-started/index.html#what-is-a-snapshot-version) with a (case sensitive) SNAPSHOT suffix, so these artifacts are considered "releases" by build systems such as the `mavenContent` repository filter in Gradle or `releases` artifact policies in Maven.
 
 ### Flaky Tests
 
-OpenSearch has a very large test suite with long running, often failing (flaky), integration tests. Such individual tests are labelled as [Flaky Random Test Failure](https://github.com/opensearch-project/OpenSearch/issues?q=is%3Aopen+is%3Aissue+label%3A%22flaky-test%22). Your help is wanted fixing these!
+If you encounter a test failure locally or in CI that is seemingly unrelated to the change in your pull request, it may be a known flaky test or a new test failure. OpenSearch has a very large test suite with long running, often failing (flaky), integration tests. Such individual tests are labelled as [Flaky Random Test Failure](https://github.com/opensearch-project/OpenSearch/issues?q=is%3Aopen+is%3Aissue+label%3A%22flaky-test%22). Your help is wanted fixing these!
 
-If you encounter a build/test failure in CI that is unrelated to the change in your pull request, it may be a known flaky test, or a new test failure.
+The automation [gradle-check-flaky-test-detector](https://build.ci.opensearch.org/job/gradle-check-flaky-test-detector/), which runs in OpenSearch public Jenkins, identifies failing flaky issues that are part of post-merge actions. Once a flaky test is identified, the automation creates an issue with detailed report that includes links to all relevant commits, the Gradle check build log, the test report, and pull requests that are impacted with the flaky test failures. This automation leverages data from the [OpenSearch Metrics Project](https://github.com/opensearch-project/opensearch-metrics) to establish a baseline for creating the issue and updating the flaky test report. For all flaky test issues created by automation, visit this [link](https://github.com/opensearch-project/OpenSearch/issues?q=is%3Aissue+is%3Aopen+label%3A%3Etest-failure+author%3Aopensearch-ci-bot).
 
-1. Follow failed CI links, and locate the failing test(s).
-2. Copy-paste the failure into a comment of your PR.
-3. Search through [issues](https://github.com/opensearch-project/OpenSearch/issues?q=is%3Aopen+is%3Aissue+label%3A%22flaky-test%22) using the name of the failed test for whether this is a known flaky test. 
-5. If an existing issue is found, paste a link to the known issue in a comment to your PR.
-6. If no existing issue is found, open one.
-7. Retry CI via the GitHub UX or by pushing an update to your PR.
+If you still see a failing test that is not part of the post merge actions, please do:
+
+* Follow failed CI links, and locate the failing test(s) or use the [Gradle Check Metrics Dashboard](#gradle-check-metrics-dashboard).
+* Copy-paste the failure into a comment of your PR.
+* Search through issues using the name of the failed test for whether this is a known flaky test.
+* If no existing issue is found, open one.
+* Retry CI via the GitHub UX or by pushing an update to your PR.
+
+
+### Gradle Check Metrics Dashboard
+
+To get the comprehensive insights and analysis of the Gradle Check test failures, visit the [OpenSearch Gradle Check Metrics Dashboard](https://metrics.opensearch.org/_dashboards/app/dashboards#/view/e5e64d40-ed31-11ee-be99-69d1dbc75083). This dashboard is part of the [OpenSearch Metrics Project](https://github.com/opensearch-project/opensearch-metrics) initiative. The dashboard contains multiple data points that can help investigate and resolve flaky failures. Additionally, this dashboard can be used to drill down, slice, and dice the data using multiple supported filters, which further aids in troubleshooting and resolving issues.

@@ -32,15 +32,16 @@
 
 package org.opensearch.http.nio;
 
-import io.netty.handler.codec.http.FullHttpResponse;
 import org.opensearch.NioIntegTestCase;
-import org.opensearch.common.transport.TransportAddress;
+import org.opensearch.core.common.transport.TransportAddress;
 import org.opensearch.http.HttpServerTransport;
 import org.opensearch.test.OpenSearchIntegTestCase.ClusterScope;
 import org.opensearch.test.OpenSearchIntegTestCase.Scope;
 
 import java.util.Collection;
 import java.util.Locale;
+
+import io.netty.handler.codec.http.FullHttpResponse;
 
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
@@ -60,8 +61,8 @@ public class NioPipeliningIT extends NioIntegTestCase {
         TransportAddress[] boundAddresses = httpServerTransport.boundAddress().boundAddresses();
         TransportAddress transportAddress = randomFrom(boundAddresses);
 
-        try (NioHttpClient nettyHttpClient = new NioHttpClient()) {
-            Collection<FullHttpResponse> responses = nettyHttpClient.get(transportAddress.address(), requests);
+        try (NioHttpClient client = NioHttpClient.http()) {
+            Collection<FullHttpResponse> responses = client.get(transportAddress.address(), requests);
             assertThat(responses, hasSize(5));
 
             Collection<String> opaqueIds = NioHttpClient.returnOpaqueIds(responses);

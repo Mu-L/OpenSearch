@@ -36,25 +36,32 @@ import org.apache.lucene.store.Directory;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.common.Nullable;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.index.IndexSettings;
 import org.opensearch.index.shard.ShardPath;
+import org.opensearch.index.store.IndexStoreListener;
 import org.opensearch.indices.recovery.RecoveryState;
 
 import java.io.IOException;
 import java.util.Collections;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * A plugin that provides alternative directory implementations.
  *
  * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public interface IndexStorePlugin {
 
     /**
      * An interface that describes how to create a new directory instance per shard.
+     *
+     * @opensearch.api
      */
     @FunctionalInterface
+    @PublicApi(since = "1.0.0")
     interface DirectoryFactory {
         /**
          * Creates a new directory per shard. This method is called once per shard on shard creation.
@@ -64,22 +71,6 @@ public interface IndexStorePlugin {
          * @throws IOException if an IOException occurs while opening the directory
          */
         Directory newDirectory(IndexSettings indexSettings, ShardPath shardPath) throws IOException;
-    }
-
-    /**
-     * An interface that describes how to create a new remote directory instance per shard.
-     */
-    @FunctionalInterface
-    interface RemoteDirectoryFactory {
-        /**
-         * Creates a new remote directory per shard. This method is called once per shard on shard creation.
-         * @param repositoryName repository name
-         * @param indexSettings the shards index settings
-         * @param shardPath the path the shard is using
-         * @return a new RemoteDirectory instance
-         * @throws IOException if an IOException occurs while opening the directory
-         */
-        Directory newDirectory(String repositoryName, IndexSettings indexSettings, ShardPath shardPath) throws IOException;
     }
 
     /**
@@ -93,8 +84,11 @@ public interface IndexStorePlugin {
 
     /**
      * An interface that allows to create a new {@link RecoveryState} per shard.
+     *
+     * @opensearch.api
      */
     @FunctionalInterface
+    @PublicApi(since = "1.0.0")
     interface RecoveryStateFactory {
         /**
          * Creates a new {@link RecoveryState} per shard. This method is called once per shard on shard creation.
@@ -112,5 +106,12 @@ public interface IndexStorePlugin {
      */
     default Map<String, RecoveryStateFactory> getRecoveryStateFactories() {
         return Collections.emptyMap();
+    }
+
+    /**
+     * The {@link IndexStoreListener}s for this plugin which are triggered upon shard/index path deletion
+     */
+    default Optional<IndexStoreListener> getIndexStoreListener() {
+        return Optional.empty();
     }
 }

@@ -35,8 +35,8 @@ package org.opensearch.client.indices;
 import org.opensearch.client.TimedRequest;
 import org.opensearch.client.Validatable;
 import org.opensearch.common.Nullable;
-import org.opensearch.common.Strings;
 import org.opensearch.common.unit.TimeValue;
+import org.opensearch.core.common.Strings;
 
 import java.util.Arrays;
 import java.util.List;
@@ -90,23 +90,8 @@ public class GetIndexTemplatesRequest implements Validatable {
         return clusterManagerNodeTimeout;
     }
 
-    /**
-     * @return the timeout for waiting for the cluster-manager node to respond
-     * @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #getMasterNodeTimeout()}
-     */
-    @Deprecated
-    public TimeValue getMasterNodeTimeout() {
-        return getClusterManagerNodeTimeout();
-    }
-
     public void setClusterManagerNodeTimeout(@Nullable TimeValue clusterManagerNodeTimeout) {
         this.clusterManagerNodeTimeout = clusterManagerNodeTimeout;
-    }
-
-    /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #setClusterManagerNodeTimeout(TimeValue)} */
-    @Deprecated
-    public void setMasterNodeTimeout(@Nullable TimeValue clusterManagerNodeTimeout) {
-        setClusterManagerNodeTimeout(clusterManagerNodeTimeout);
     }
 
     public void setClusterManagerNodeTimeout(String clusterManagerNodeTimeout) {
@@ -115,12 +100,6 @@ public class GetIndexTemplatesRequest implements Validatable {
             getClass().getSimpleName() + ".clusterManagerNodeTimeout"
         );
         setClusterManagerNodeTimeout(timeValue);
-    }
-
-    /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #setClusterManagerNodeTimeout(String)} */
-    @Deprecated
-    public void setMasterNodeTimeout(String clusterManagerNodeTimeout) {
-        setClusterManagerNodeTimeout(clusterManagerNodeTimeout);
     }
 
     /**

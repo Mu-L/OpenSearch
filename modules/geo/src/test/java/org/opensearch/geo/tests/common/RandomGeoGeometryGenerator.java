@@ -8,7 +8,6 @@
 
 package org.opensearch.geo.tests.common;
 
-import org.junit.Assert;
 import org.opensearch.geo.algorithm.PolygonGenerator;
 import org.opensearch.geometry.Geometry;
 import org.opensearch.geometry.GeometryCollection;
@@ -23,6 +22,7 @@ import org.opensearch.geometry.Rectangle;
 import org.opensearch.geometry.ShapeType;
 import org.opensearch.index.mapper.GeoShapeIndexer;
 import org.opensearch.test.OpenSearchTestCase;
+import org.junit.Assert;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -197,6 +197,26 @@ public class RandomGeoGeometryGenerator {
             maxY = Math.max(maxY, y);
         }
         return new Rectangle(minX, maxX, maxY, minY);
+    }
+
+    /**
+     * Generates a {@link Rectangle} of a specific radius. The generated rectangle can cross the international date line.
+     *
+     * @param r {@link Random}
+     * @param radius double
+     * @return {@link Rectangle}
+     */
+    public static Rectangle randomRectangle(final Random r, double radius) {
+        final double[] centre = new double[2];
+        RandomGeoGenerator.randomPointIn(r, -180, -(90 - radius), 180, 90 - radius, centre);
+        final double centreX = centre[0];
+        final double centreY = centre[1];
+        return new Rectangle(
+            RandomGeoGenerator.normalizeLongitude(centreX - radius),
+            RandomGeoGenerator.normalizeLongitude(centreX + radius),
+            centreY + radius,
+            centreY - radius
+        );
     }
 
     /**

@@ -75,7 +75,7 @@ public class VectorHighlighterTests extends OpenSearchTestCase {
         IndexSearcher searcher = new IndexSearcher(reader);
         TopDocs topDocs = searcher.search(new TermQuery(new Term("_id", "1")), 1);
 
-        assertThat(topDocs.totalHits.value, equalTo(1L));
+        assertThat(topDocs.totalHits.value(), equalTo(1L));
 
         FastVectorHighlighter highlighter = new FastVectorHighlighter();
         String fragment = highlighter.getBestFragment(
@@ -106,12 +106,15 @@ public class VectorHighlighterTests extends OpenSearchTestCase {
         IndexSearcher searcher = new IndexSearcher(reader);
         TopDocs topDocs = searcher.search(new TermQuery(new Term("_id", "1")), 1);
 
-        assertThat(topDocs.totalHits.value, equalTo(1L));
+        assertThat(topDocs.totalHits.value(), equalTo(1L));
 
         FastVectorHighlighter highlighter = new FastVectorHighlighter();
 
         PrefixQuery prefixQuery = new PrefixQuery(new Term("content", "ba"));
-        assertThat(prefixQuery.getRewriteMethod().getClass().getName(), equalTo(PrefixQuery.CONSTANT_SCORE_REWRITE.getClass().getName()));
+        assertThat(
+            prefixQuery.getRewriteMethod().getClass().getName(),
+            equalTo(PrefixQuery.CONSTANT_SCORE_BLENDED_REWRITE.getClass().getName())
+        );
         String fragment = highlighter.getBestFragment(
             highlighter.getFieldQuery(prefixQuery),
             reader,
@@ -122,13 +125,16 @@ public class VectorHighlighterTests extends OpenSearchTestCase {
         assertThat(fragment, nullValue());
 
         prefixQuery = new PrefixQuery(new Term("content", "ba"), PrefixQuery.SCORING_BOOLEAN_REWRITE);
-        Query rewriteQuery = prefixQuery.rewrite(reader);
+        Query rewriteQuery = prefixQuery.rewrite(searcher);
         fragment = highlighter.getBestFragment(highlighter.getFieldQuery(rewriteQuery), reader, topDocs.scoreDocs[0].doc, "content", 30);
         assertThat(fragment, notNullValue());
 
         // now check with the custom field query
         prefixQuery = new PrefixQuery(new Term("content", "ba"));
-        assertThat(prefixQuery.getRewriteMethod().getClass().getName(), equalTo(PrefixQuery.CONSTANT_SCORE_REWRITE.getClass().getName()));
+        assertThat(
+            prefixQuery.getRewriteMethod().getClass().getName(),
+            equalTo(PrefixQuery.CONSTANT_SCORE_BLENDED_REWRITE.getClass().getName())
+        );
         fragment = highlighter.getBestFragment(
             new CustomFieldQuery(prefixQuery, reader, highlighter),
             reader,
@@ -156,7 +162,7 @@ public class VectorHighlighterTests extends OpenSearchTestCase {
         IndexSearcher searcher = new IndexSearcher(reader);
         TopDocs topDocs = searcher.search(new TermQuery(new Term("_id", "1")), 1);
 
-        assertThat(topDocs.totalHits.value, equalTo(1L));
+        assertThat(topDocs.totalHits.value(), equalTo(1L));
 
         FastVectorHighlighter highlighter = new FastVectorHighlighter();
         String fragment = highlighter.getBestFragment(
@@ -182,7 +188,7 @@ public class VectorHighlighterTests extends OpenSearchTestCase {
         IndexSearcher searcher = new IndexSearcher(reader);
         TopDocs topDocs = searcher.search(new TermQuery(new Term("_id", "1")), 1);
 
-        assertThat(topDocs.totalHits.value, equalTo(1L));
+        assertThat(topDocs.totalHits.value(), equalTo(1L));
 
         FastVectorHighlighter highlighter = new FastVectorHighlighter();
         String fragment = highlighter.getBestFragment(

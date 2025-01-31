@@ -34,9 +34,10 @@ package org.opensearch.gradle.test;
 
 import org.opensearch.gradle.Architecture;
 import org.opensearch.gradle.DistributionDownloadPlugin;
-import org.opensearch.gradle.OpenSearchDistribution;
+import org.opensearch.gradle.JavaPackageType;
 import org.opensearch.gradle.Jdk;
 import org.opensearch.gradle.JdkDownloadPlugin;
+import org.opensearch.gradle.OpenSearchDistribution;
 import org.opensearch.gradle.SystemPropertyCommandLineArgumentProvider;
 import org.opensearch.gradle.Version;
 import org.opensearch.gradle.VersionProperties;
@@ -48,6 +49,7 @@ import org.opensearch.gradle.util.GradleUtils;
 import org.opensearch.gradle.util.Util;
 import org.opensearch.gradle.vagrant.VagrantBasePlugin;
 import org.opensearch.gradle.vagrant.VagrantExtension;
+import org.opensearch.gradle.vagrant.VagrantMachine;
 import org.gradle.api.Action;
 import org.gradle.api.NamedDomainObjectContainer;
 import org.gradle.api.Plugin;
@@ -61,7 +63,6 @@ import org.gradle.api.specs.Specs;
 import org.gradle.api.tasks.Copy;
 import org.gradle.api.tasks.TaskProvider;
 import org.gradle.api.tasks.testing.Test;
-import org.opensearch.gradle.vagrant.VagrantMachine;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -71,13 +72,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Set;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 public class DistroTestPlugin implements Plugin<Project> {
-    private static final String SYSTEM_JDK_VERSION = "11.0.17+8";
+    private static final String SYSTEM_JDK_VERSION = "23.0.2+7";
     private static final String SYSTEM_JDK_VENDOR = "adoptium";
-    private static final String GRADLE_JDK_VERSION = "17.0.5+8";
+    private static final String GRADLE_JDK_VERSION = "23.0.2+7";
     private static final String GRADLE_JDK_VENDOR = "adoptium";
 
     // all distributions used by distro tests. this is temporary until tests are per distribution
@@ -119,8 +121,8 @@ public class DistroTestPlugin implements Plugin<Project> {
             TaskProvider<?> depsTask = project.getTasks().register(taskname + "#deps");
             depsTask.configure(t -> t.dependsOn(distribution, examplePlugin));
             depsTasks.put(taskname, depsTask);
-            // TODO - suppressing failure temporarily where duplicate tasks are created for docker.
-            try {
+            // Avoid duplicate tasks such as docker registered in lifecycleTasks
+            if (project.getTasksByName(taskname, false).isEmpty()) {
                 TaskProvider<Test> destructiveTask = configureTestTask(project, taskname, distribution, t -> {
                     t.onlyIf(t2 -> distribution.isDocker() == false || dockerSupport.get().getDockerAvailability().isAvailable);
                     addSysprop(t, DISTRIBUTION_SYSPROP, distribution::getFilepath);
@@ -134,12 +136,10 @@ public class DistroTestPlugin implements Plugin<Project> {
                 }
                 destructiveDistroTest.configure(t -> t.dependsOn(destructiveTask));
                 lifecycleTasks.get(distribution.getType()).configure(t -> t.dependsOn(destructiveTask));
-            } catch (Exception ex) {
-                System.out.println(ex.getMessage());
             }
 
             if ((distribution.getType() == OpenSearchDistribution.Type.DEB || distribution.getType() == OpenSearchDistribution.Type.RPM)
-                && distribution.getBundledJdk()) {
+                && distribution.getBundledJdk() != JavaPackageType.NONE) {
                 for (Version version : BuildParams.getBwcVersions().getIndexCompatible()) {
                     if (version.before("6.3.0")) {
                         continue; // before opening xpack
@@ -197,13 +197,9 @@ public class DistroTestPlugin implements Plugin<Project> {
 
             // windows boxes get windows distributions, and linux boxes get linux distributions
             if (isWindows(vmProject)) {
-                configureVMWrapperTasks(
-                    vmProject,
-                    windowsTestTasks,
-                    depsTasks,
-                    wrapperTask -> { vmLifecyleTasks.get(OpenSearchDistribution.Type.ARCHIVE).configure(t -> t.dependsOn(wrapperTask)); },
-                    vmDependencies
-                );
+                configureVMWrapperTasks(vmProject, windowsTestTasks, depsTasks, wrapperTask -> {
+                    vmLifecyleTasks.get(OpenSearchDistribution.Type.ARCHIVE).configure(t -> t.dependsOn(wrapperTask));
+                }, vmDependencies);
             } else {
                 for (Entry<OpenSearchDistribution.Type, List<TaskProvider<Test>>> entry : linuxTestTasks.entrySet()) {
                     OpenSearchDistribution.Type type = entry.getKey();
@@ -385,8 +381,8 @@ public class DistroTestPlugin implements Plugin<Project> {
                 OpenSearchDistribution.Type.RPM,
                 OpenSearchDistribution.Type.DOCKER
             )) {
-                for (boolean bundledJdk : Arrays.asList(true, false)) {
-                    if (bundledJdk == false) {
+                for (JavaPackageType bundledJdk : Set.of(JavaPackageType.NONE, JavaPackageType.JDK)) {
+                    if (bundledJdk == JavaPackageType.NONE) {
                         // We'll never publish an ARM (arm64) build without a bundled JDK.
                         if (architecture == Architecture.ARM64) {
                             continue;
@@ -409,8 +405,8 @@ public class DistroTestPlugin implements Plugin<Project> {
                 OpenSearchDistribution.Platform.LINUX,
                 OpenSearchDistribution.Platform.WINDOWS
             )) {
-                for (boolean bundledJdk : Arrays.asList(true, false)) {
-                    if (bundledJdk == false && architecture != Architecture.X64) {
+                for (JavaPackageType bundledJdk : Set.of(JavaPackageType.NONE, JavaPackageType.JDK)) {
+                    if (bundledJdk == JavaPackageType.NONE && architecture != Architecture.X64) {
                         // We will never publish distributions for non-x86 (amd64) platforms
                         // without a bundled JDK
                         continue;
@@ -438,7 +434,7 @@ public class DistroTestPlugin implements Plugin<Project> {
         Architecture architecture,
         OpenSearchDistribution.Type type,
         OpenSearchDistribution.Platform platform,
-        boolean bundledJdk,
+        JavaPackageType bundledJdk,
         String version
     ) {
         String name = distroId(type, platform, bundledJdk, architecture) + "-" + version;
@@ -472,11 +468,12 @@ public class DistroTestPlugin implements Plugin<Project> {
     private static String distroId(
         OpenSearchDistribution.Type type,
         OpenSearchDistribution.Platform platform,
-        boolean bundledJdk,
+        JavaPackageType bundledJdk,
         Architecture architecture
     ) {
-        return (type == OpenSearchDistribution.Type.ARCHIVE ? platform + "-" : "") + type + (bundledJdk ? "" : "-no-jdk")
-            + (architecture == Architecture.X64 ? "" : "-" + architecture.toString().toLowerCase());
+        return (type == OpenSearchDistribution.Type.ARCHIVE ? platform + "-" : "") + type + (bundledJdk != JavaPackageType.NONE
+            ? (bundledJdk == JavaPackageType.JDK ? "" : "-jre")
+            : "-no-jdk") + (architecture == Architecture.X64 ? "" : "-" + architecture.toString().toLowerCase());
     }
 
     private static String destructiveDistroTestTaskName(OpenSearchDistribution distro) {

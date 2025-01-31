@@ -36,12 +36,14 @@ import org.opensearch.OpenSearchException;
 import org.opensearch.OpenSearchParseException;
 import org.opensearch.cluster.routing.allocation.RoutingAllocation;
 import org.opensearch.cluster.routing.allocation.RoutingExplanations;
-import org.opensearch.common.Strings;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.xcontent.ToXContentFragment;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.common.annotation.PublicApi;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.ToXContentFragment;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -53,8 +55,9 @@ import java.util.Objects;
  * A simple {@link AllocationCommand} composite managing several
  * {@link AllocationCommand} implementations
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class AllocationCommands implements ToXContentFragment {
     private final List<AllocationCommand> commands = new ArrayList<>();
 
@@ -216,6 +219,6 @@ public class AllocationCommands implements ToXContentFragment {
 
     @Override
     public String toString() {
-        return Strings.toString(this, true, true);
+        return Strings.toString(MediaTypeRegistry.JSON, this, true, true);
     }
 }

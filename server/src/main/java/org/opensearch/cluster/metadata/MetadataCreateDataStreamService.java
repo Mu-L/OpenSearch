@@ -35,11 +35,10 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.OpenSearchStatusException;
 import org.opensearch.ResourceAlreadyExistsException;
-import org.opensearch.action.ActionListener;
 import org.opensearch.action.admin.indices.create.CreateIndexClusterStateUpdateRequest;
 import org.opensearch.action.support.ActiveShardCount;
 import org.opensearch.action.support.ActiveShardsObserver;
-import org.opensearch.action.support.master.AcknowledgedResponse;
+import org.opensearch.action.support.clustermanager.AcknowledgedResponse;
 import org.opensearch.cluster.AckedClusterStateUpdateTask;
 import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.ack.ClusterStateUpdateRequest;
@@ -50,11 +49,12 @@ import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.Priority;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
-import org.opensearch.common.xcontent.NamedXContentRegistry;
-import org.opensearch.common.xcontent.ObjectPath;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.rest.RestStatus;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
+import org.opensearch.core.xcontent.ObjectPath;
 import org.opensearch.index.mapper.MapperService;
 import org.opensearch.index.mapper.MetadataFieldMapper;
-import org.opensearch.rest.RestStatus;
 import org.opensearch.threadpool.ThreadPool;
 
 import java.io.IOException;
@@ -99,7 +99,9 @@ public class MetadataCreateDataStreamService {
                     new String[] { firstBackingIndexName },
                     ActiveShardCount.DEFAULT,
                     request.masterNodeTimeout(),
-                    shardsAcked -> { finalListener.onResponse(new AcknowledgedResponse(true)); },
+                    shardsAcked -> {
+                        finalListener.onResponse(new AcknowledgedResponse(true));
+                    },
                     finalListener::onFailure
                 );
             } else {

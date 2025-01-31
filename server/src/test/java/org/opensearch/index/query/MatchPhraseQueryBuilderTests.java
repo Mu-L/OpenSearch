@@ -40,8 +40,9 @@ import org.apache.lucene.search.PhraseQuery;
 import org.apache.lucene.search.PointRangeQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.TermQuery;
-import org.opensearch.common.ParsingException;
+import org.opensearch.core.common.ParsingException;
 import org.opensearch.index.search.MatchQuery.ZeroTermsQuery;
+import org.opensearch.search.approximate.ApproximateScoreQuery;
 import org.opensearch.test.AbstractQueryTestCase;
 
 import java.io.IOException;
@@ -130,6 +131,7 @@ public class MatchPhraseQueryBuilderTests extends AbstractQueryTestCase<MatchPhr
                 .or(instanceOf(PointRangeQuery.class))
                 .or(instanceOf(IndexOrDocValuesQuery.class))
                 .or(instanceOf(MatchNoDocsQuery.class))
+                .or(instanceOf(ApproximateScoreQuery.class))
         );
     }
 

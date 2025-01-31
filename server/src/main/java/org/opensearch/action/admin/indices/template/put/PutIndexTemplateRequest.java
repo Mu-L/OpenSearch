@@ -41,24 +41,25 @@ import org.opensearch.action.admin.indices.mapping.put.PutMappingRequest;
 import org.opensearch.action.support.IndicesOptions;
 import org.opensearch.action.support.clustermanager.ClusterManagerNodeRequest;
 import org.opensearch.common.Nullable;
-import org.opensearch.common.Strings;
-import org.opensearch.common.bytes.BytesArray;
-import org.opensearch.common.bytes.BytesReference;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.logging.DeprecationLogger;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.xcontent.DeprecationHandler;
 import org.opensearch.common.xcontent.LoggingDeprecationHandler;
-import org.opensearch.common.xcontent.NamedXContentRegistry;
-import org.opensearch.common.xcontent.ToXContentObject;
-import org.opensearch.common.xcontent.XContentBuilder;
 import org.opensearch.common.xcontent.XContentFactory;
 import org.opensearch.common.xcontent.XContentHelper;
-import org.opensearch.common.xcontent.XContentParser;
 import org.opensearch.common.xcontent.XContentType;
 import org.opensearch.common.xcontent.json.JsonXContent;
 import org.opensearch.common.xcontent.support.XContentMapValues;
+import org.opensearch.core.common.bytes.BytesArray;
+import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.xcontent.DeprecationHandler;
+import org.opensearch.core.xcontent.MediaType;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
+import org.opensearch.core.xcontent.ToXContentObject;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.mapper.MapperService;
 
 import java.io.IOException;
@@ -78,8 +79,9 @@ import static org.opensearch.common.settings.Settings.writeSettingsToStream;
 /**
  * A request to create an index template.
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class PutIndexTemplateRequest extends ClusterManagerNodeRequest<PutIndexTemplateRequest>
     implements
         IndicesRequest,
@@ -225,8 +227,8 @@ public class PutIndexTemplateRequest extends ClusterManagerNodeRequest<PutIndexT
     /**
      * The settings to create the index template with (either json/yaml format).
      */
-    public PutIndexTemplateRequest settings(String source, XContentType xContentType) {
-        this.settings = Settings.builder().loadFromSource(source, xContentType).build();
+    public PutIndexTemplateRequest settings(String source, MediaType mediaType) {
+        this.settings = Settings.builder().loadFromSource(source, mediaType).build();
         return this;
     }
 
@@ -258,10 +260,10 @@ public class PutIndexTemplateRequest extends ClusterManagerNodeRequest<PutIndexT
      * Adds mapping that will be added when the index gets created.
      *
      * @param source The mapping source
-     * @param xContentType The type of content contained within the source
+     * @param mediaType The type of content contained within the source
      */
-    public PutIndexTemplateRequest mapping(String source, XContentType xContentType) {
-        return mapping(new BytesArray(source), xContentType);
+    public PutIndexTemplateRequest mapping(String source, MediaType mediaType) {
+        return mapping(new BytesArray(source), mediaType);
     }
 
     /**
@@ -277,11 +279,11 @@ public class PutIndexTemplateRequest extends ClusterManagerNodeRequest<PutIndexT
      * Adds mapping that will be added when the index gets created.
      *
      * @param source The mapping source
-     * @param xContentType the source content type
+     * @param mediaType the source content type
      */
-    public PutIndexTemplateRequest mapping(BytesReference source, XContentType xContentType) {
-        Objects.requireNonNull(xContentType);
-        Map<String, Object> mappingAsMap = XContentHelper.convertToMap(source, false, xContentType).v2();
+    public PutIndexTemplateRequest mapping(BytesReference source, MediaType mediaType) {
+        Objects.requireNonNull(mediaType);
+        Map<String, Object> mappingAsMap = XContentHelper.convertToMap(source, false, mediaType).v2();
         return mapping(mappingAsMap);
     }
 
@@ -297,7 +299,7 @@ public class PutIndexTemplateRequest extends ClusterManagerNodeRequest<PutIndexT
         try {
             XContentBuilder builder = XContentFactory.jsonBuilder();
             builder.map(source);
-            mappings = Strings.toString(builder);
+            mappings = builder.toString();
             return this;
         } catch (IOException e) {
             throw new OpenSearchGenerationException("Failed to generate [" + source + "]", e);
@@ -397,22 +399,22 @@ public class PutIndexTemplateRequest extends ClusterManagerNodeRequest<PutIndexT
     /**
      * The template source definition.
      */
-    public PutIndexTemplateRequest source(byte[] source, XContentType xContentType) {
-        return source(source, 0, source.length, xContentType);
+    public PutIndexTemplateRequest source(byte[] source, MediaType mediaType) {
+        return source(source, 0, source.length, mediaType);
     }
 
     /**
      * The template source definition.
      */
-    public PutIndexTemplateRequest source(byte[] source, int offset, int length, XContentType xContentType) {
-        return source(new BytesArray(source, offset, length), xContentType);
+    public PutIndexTemplateRequest source(byte[] source, int offset, int length, MediaType mediaType) {
+        return source(new BytesArray(source, offset, length), mediaType);
     }
 
     /**
      * The template source definition.
      */
-    public PutIndexTemplateRequest source(BytesReference source, XContentType xContentType) {
-        return source(XContentHelper.convertToMap(source, true, xContentType).v2());
+    public PutIndexTemplateRequest source(BytesReference source, MediaType mediaType) {
+        return source(XContentHelper.convertToMap(source, true, mediaType).v2());
     }
 
     public Set<Alias> aliases() {

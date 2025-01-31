@@ -28,23 +28,25 @@ while [ -h "$SCRIPT" ] ; do
   fi
 done
 
-# determine OpenSearch home; to do this, we strip from the path until we find
-# bin, and then strip bin (there is an assumption here that there is no nested
-# directory under bin also named bin)
-OPENSEARCH_HOME=`dirname "$SCRIPT"`
+if [[ -z "$OPENSEARCH_HOME" ]]; then
+  # determine OpenSearch home; to do this, we strip from the path until we find
+  # bin, and then strip bin (there is an assumption here that there is no nested
+  # directory under bin also named bin)
+  OPENSEARCH_HOME=`dirname "$SCRIPT"`
 
-# now make OPENSEARCH_HOME absolute
-OPENSEARCH_HOME=`cd "$OPENSEARCH_HOME"; pwd`
+  # now make OPENSEARCH_HOME absolute
+  OPENSEARCH_HOME=`cd "$OPENSEARCH_HOME"; pwd`
 
-while [ "`basename "$OPENSEARCH_HOME"`" != "bin" ]; do
+  while [ "`basename "$OPENSEARCH_HOME"`" != "bin" ]; do
+    OPENSEARCH_HOME=`dirname "$OPENSEARCH_HOME"`
+  done
   OPENSEARCH_HOME=`dirname "$OPENSEARCH_HOME"`
-done
-OPENSEARCH_HOME=`dirname "$OPENSEARCH_HOME"`
+fi
 
 # now set the classpath
 OPENSEARCH_CLASSPATH="$OPENSEARCH_HOME/lib/*"
 
-# now set the path to java: OPENSEARCH_JAVA_HOME -> JAVA_HOME -> bundled JDK
+# now set the path to java: OPENSEARCH_JAVA_HOME -> JAVA_HOME -> bundled JRE -> bundled JDK
 if [ ! -z "$OPENSEARCH_JAVA_HOME" ]; then
   JAVA="$OPENSEARCH_JAVA_HOME/bin/java"
   JAVA_TYPE="OPENSEARCH_JAVA_HOME"
@@ -55,13 +57,18 @@ else
   if [ $OS = "darwin" ]; then
     # macOS bundled Java
     JAVA="$OPENSEARCH_HOME/jdk.app/Contents/Home/bin/java"
+    JAVA_TYPE="bundled jdk"
   elif [ $OS = "freebsd" ]; then
     # using FreeBSD default java from ports if JAVA_HOME is not set
     JAVA="/usr/local/bin/java"
+    JAVA_TYPE="bundled jdk"
+  elif [ -d "$OPENSEARCH_HOME/jre" ]; then
+    JAVA="$OPENSEARCH_HOME/jre/bin/java"
+    JAVA_TYPE="bundled jre"
   else
     JAVA="$OPENSEARCH_HOME/jdk/bin/java"
+    JAVA_TYPE="bundled jdk"
   fi
-  JAVA_TYPE="bundled jdk"
 fi
 
 if [ ! -x "$JAVA" ]; then

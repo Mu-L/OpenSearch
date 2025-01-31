@@ -35,29 +35,31 @@ package org.opensearch.action.admin.cluster.snapshots.status;
 import org.opensearch.OpenSearchParseException;
 import org.opensearch.action.support.broadcast.BroadcastShardResponse;
 import org.opensearch.cluster.metadata.IndexMetadata;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.xcontent.ConstructingObjectParser;
-import org.opensearch.common.xcontent.ObjectParser;
-import org.opensearch.common.xcontent.ToXContentFragment;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
-import org.opensearch.common.xcontent.XContentParserUtils;
-import org.opensearch.index.Index;
-import org.opensearch.index.shard.ShardId;
+import org.opensearch.common.annotation.PublicApi;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.index.Index;
+import org.opensearch.core.index.shard.ShardId;
+import org.opensearch.core.xcontent.ConstructingObjectParser;
+import org.opensearch.core.xcontent.ObjectParser;
+import org.opensearch.core.xcontent.ToXContentFragment;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
+import org.opensearch.core.xcontent.XContentParserUtils;
 import org.opensearch.index.snapshots.IndexShardSnapshotStatus;
 
 import java.io.IOException;
 
-import static org.opensearch.common.xcontent.ConstructingObjectParser.constructorArg;
-import static org.opensearch.common.xcontent.ConstructingObjectParser.optionalConstructorArg;
+import static org.opensearch.core.xcontent.ConstructingObjectParser.constructorArg;
+import static org.opensearch.core.xcontent.ConstructingObjectParser.optionalConstructorArg;
 
 /**
  * Status for snapshotting an Index Shard
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class SnapshotIndexShardStatus extends BroadcastShardResponse implements ToXContentFragment {
 
     private SnapshotIndexShardStage stage = SnapshotIndexShardStage.INIT;

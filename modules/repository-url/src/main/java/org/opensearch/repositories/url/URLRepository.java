@@ -43,7 +43,7 @@ import org.opensearch.common.blobstore.url.URLBlobStore;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Setting.Property;
 import org.opensearch.common.util.URIPattern;
-import org.opensearch.common.xcontent.NamedXContentRegistry;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
 import org.opensearch.env.Environment;
 import org.opensearch.indices.recovery.RecoverySettings;
 import org.opensearch.repositories.RepositoryException;
@@ -113,7 +113,7 @@ public class URLRepository extends BlobStoreRepository {
         ClusterService clusterService,
         RecoverySettings recoverySettings
     ) {
-        super(metadata, false, namedXContentRegistry, clusterService, recoverySettings);
+        super(metadata, namedXContentRegistry, clusterService, recoverySettings);
 
         if (URL_SETTING.exists(metadata.settings()) == false && REPOSITORIES_URL_SETTING.exists(environment.settings()) == false) {
             throw new RepositoryException(metadata.name(), "missing url");

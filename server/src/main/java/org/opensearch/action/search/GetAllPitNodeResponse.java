@@ -11,10 +11,11 @@ package org.opensearch.action.search;
 
 import org.opensearch.action.support.nodes.BaseNodeResponse;
 import org.opensearch.cluster.node.DiscoveryNode;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.xcontent.ToXContentFragment;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.common.annotation.PublicApi;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.xcontent.ToXContentFragment;
+import org.opensearch.core.xcontent.XContentBuilder;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -22,7 +23,10 @@ import java.util.List;
 
 /**
  * Inner node get all pits response
+ *
+ * @opensearch.api
  */
+@PublicApi(since = "2.3.0")
 public class GetAllPitNodeResponse extends BaseNodeResponse implements ToXContentFragment {
 
     /**

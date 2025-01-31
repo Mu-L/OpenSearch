@@ -44,7 +44,7 @@ import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.opensearch.SpecialPermission;
 import org.opensearch.common.SuppressForbidden;
-import org.opensearch.core.internal.io.IOUtils;
+import org.opensearch.common.util.io.IOUtils;
 
 import java.io.FilterInputStream;
 import java.io.IOException;
@@ -106,6 +106,7 @@ class GoogleCloudStorageRetryingInputStream extends InputStream {
         currentStream = openStream();
     }
 
+    @SuppressWarnings("removal")
     @SuppressForbidden(reason = "need access to storage client")
     private static com.google.api.services.storage.Storage getStorage(Storage client) {
         return AccessController.doPrivileged((PrivilegedAction<com.google.api.services.storage.Storage>) () -> {

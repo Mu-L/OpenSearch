@@ -37,7 +37,7 @@ import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Setting.Property;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.rest.RestStatus;
+import org.opensearch.core.rest.RestStatus;
 
 import java.util.EnumSet;
 
@@ -75,19 +75,6 @@ public class NoClusterManagerBlockService {
         RestStatus.SERVICE_UNAVAILABLE,
         EnumSet.of(ClusterBlockLevel.METADATA_WRITE)
     );
-
-    /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #NO_CLUSTER_MANAGER_BLOCK_ID} */
-    @Deprecated
-    public static final int NO_MASTER_BLOCK_ID = NO_CLUSTER_MANAGER_BLOCK_ID;
-    /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #NO_CLUSTER_MANAGER_BLOCK_WRITES} */
-    @Deprecated
-    public static final ClusterBlock NO_MASTER_BLOCK_WRITES = NO_CLUSTER_MANAGER_BLOCK_WRITES;
-    /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #NO_CLUSTER_MANAGER_BLOCK_ALL} */
-    @Deprecated
-    public static final ClusterBlock NO_MASTER_BLOCK_ALL = NO_CLUSTER_MANAGER_BLOCK_ALL;
-    /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #NO_CLUSTER_MANAGER_BLOCK_METADATA_WRITES} */
-    @Deprecated
-    public static final ClusterBlock NO_MASTER_BLOCK_METADATA_WRITES = NO_CLUSTER_MANAGER_BLOCK_METADATA_WRITES;
 
     public static final Setting<ClusterBlock> NO_MASTER_BLOCK_SETTING = new Setting<>(
         "cluster.no_master_block",
@@ -130,12 +117,6 @@ public class NoClusterManagerBlockService {
     }
 
     public ClusterBlock getNoClusterManagerBlock() {
-        return noClusterManagerBlock;
-    }
-
-    /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #getNoClusterManagerBlock()} */
-    @Deprecated
-    public ClusterBlock getNoMasterBlock() {
         return noClusterManagerBlock;
     }
 

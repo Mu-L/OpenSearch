@@ -37,6 +37,7 @@ import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.node.DiscoveryNodeRole;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.discovery.DiscoveryModule;
+import org.opensearch.telemetry.tracing.noop.NoopTracer;
 import org.opensearch.test.OpenSearchTestCase;
 import org.opensearch.test.transport.MockTransport;
 import org.opensearch.transport.TransportRequest;
@@ -101,7 +102,8 @@ public class ClusterBootstrapServiceTests extends OpenSearchTestCase {
             TransportService.NOOP_TRANSPORT_INTERCEPTOR,
             boundTransportAddress -> localNode,
             null,
-            emptySet()
+            emptySet(),
+            NoopTracer.INSTANCE
         );
     }
 
@@ -126,9 +128,9 @@ public class ClusterBootstrapServiceTests extends OpenSearchTestCase {
             settings.put(UNCONFIGURED_BOOTSTRAP_TIMEOUT_SETTING.getKey(), timeout + "ms");
         }
 
-        final AtomicReference<Supplier<Iterable<DiscoveryNode>>> discoveredNodesSupplier = new AtomicReference<>(
-            () -> { throw new AssertionError("should not be called yet"); }
-        );
+        final AtomicReference<Supplier<Iterable<DiscoveryNode>>> discoveredNodesSupplier = new AtomicReference<>(() -> {
+            throw new AssertionError("should not be called yet");
+        });
 
         final AtomicBoolean bootstrapped = new AtomicBoolean();
         ClusterBootstrapService clusterBootstrapService = new ClusterBootstrapService(
@@ -182,13 +184,9 @@ public class ClusterBootstrapServiceTests extends OpenSearchTestCase {
     }
 
     private void testDoesNothingWithSettings(Settings.Builder builder) {
-        ClusterBootstrapService clusterBootstrapService = new ClusterBootstrapService(
-            builder.build(),
-            transportService,
-            () -> { throw new AssertionError("should not be called"); },
-            () -> false,
-            vc -> { throw new AssertionError("should not be called"); }
-        );
+        ClusterBootstrapService clusterBootstrapService = new ClusterBootstrapService(builder.build(), transportService, () -> {
+            throw new AssertionError("should not be called");
+        }, () -> false, vc -> { throw new AssertionError("should not be called"); });
         transportService.start();
         clusterBootstrapService.scheduleUnconfiguredBootstrap();
         deterministicTaskQueue.runAllTasks();
@@ -201,7 +199,9 @@ public class ClusterBootstrapServiceTests extends OpenSearchTestCase {
                 transportService,
                 Collections::emptyList,
                 () -> false,
-                vc -> { throw new AssertionError("should not be called"); }
+                vc -> {
+                    throw new AssertionError("should not be called");
+                }
             );
         });
 
@@ -330,7 +330,9 @@ public class ClusterBootstrapServiceTests extends OpenSearchTestCase {
             transportService,
             Collections::emptyList,
             () -> true,
-            vc -> { throw new AssertionError("should not be called"); }
+            vc -> {
+                throw new AssertionError("should not be called");
+            }
         );
 
         transportService.start();
@@ -353,7 +355,9 @@ public class ClusterBootstrapServiceTests extends OpenSearchTestCase {
             transportService,
             () -> Stream.of(otherNode1).collect(Collectors.toList()),
             () -> false,
-            vc -> { throw new AssertionError("should not be called"); }
+            vc -> {
+                throw new AssertionError("should not be called");
+            }
         );
 
         transportService.start();
@@ -377,7 +381,9 @@ public class ClusterBootstrapServiceTests extends OpenSearchTestCase {
             transportService,
             () -> Stream.of(otherNode1, otherNode2).collect(Collectors.toList()),
             () -> false,
-            vc -> { throw new AssertionError("should not be called"); }
+            vc -> {
+                throw new AssertionError("should not be called");
+            }
         );
 
         transportService.start();
@@ -393,7 +399,9 @@ public class ClusterBootstrapServiceTests extends OpenSearchTestCase {
             transportService,
             () -> Stream.of(otherNode1, otherNode2).collect(Collectors.toList()),
             () -> true,
-            vc -> { throw new AssertionError("should not be called"); }
+            vc -> {
+                throw new AssertionError("should not be called");
+            }
         );
 
         transportService.start();
@@ -417,7 +425,9 @@ public class ClusterBootstrapServiceTests extends OpenSearchTestCase {
             transportService,
             () -> Stream.of(localNode, otherNode1, otherNode2).collect(Collectors.toList()),
             () -> false,
-            vc -> { throw new AssertionError("should not be called"); }
+            vc -> {
+                throw new AssertionError("should not be called");
+            }
         );
         transportService.start();
         clusterBootstrapService.onFoundPeersUpdated();
@@ -430,7 +440,9 @@ public class ClusterBootstrapServiceTests extends OpenSearchTestCase {
             transportService,
             () -> Stream.of(localNode, otherNode1, otherNode2).collect(Collectors.toList()),
             () -> false,
-            vc -> { throw new AssertionError("should not be called"); }
+            vc -> {
+                throw new AssertionError("should not be called");
+            }
         );
         transportService.start();
         clusterBootstrapService.onFoundPeersUpdated();
@@ -443,7 +455,9 @@ public class ClusterBootstrapServiceTests extends OpenSearchTestCase {
             transportService,
             () -> Stream.of(localNode, otherNode1, otherNode2).collect(Collectors.toList()),
             () -> false,
-            vc -> { throw new AssertionError("should not be called"); }
+            vc -> {
+                throw new AssertionError("should not be called");
+            }
         );
         transportService.start();
         clusterBootstrapService.scheduleUnconfiguredBootstrap();
@@ -484,7 +498,9 @@ public class ClusterBootstrapServiceTests extends OpenSearchTestCase {
             transportService,
             discoveredNodes::get,
             () -> false,
-            vc -> { throw new AssertionError("should not be called"); }
+            vc -> {
+                throw new AssertionError("should not be called");
+            }
         );
 
         transportService.start();
@@ -507,7 +523,9 @@ public class ClusterBootstrapServiceTests extends OpenSearchTestCase {
             transportService,
             discoveredNodes::get,
             () -> false,
-            vc -> { throw new AssertionError("should not be called"); }
+            vc -> {
+                throw new AssertionError("should not be called");
+            }
         );
 
         transportService.start();
@@ -593,7 +611,9 @@ public class ClusterBootstrapServiceTests extends OpenSearchTestCase {
             transportService,
             Collections::emptyList,
             () -> false,
-            vc -> { throw new AssertionError("should not be called"); }
+            vc -> {
+                throw new AssertionError("should not be called");
+            }
         );
 
         transportService.start();

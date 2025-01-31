@@ -32,40 +32,69 @@
 package org.opensearch.node;
 
 import org.apache.lucene.tests.util.LuceneTestCase;
-import org.apache.lucene.util.SetOnce;
 import org.opensearch.bootstrap.BootstrapCheck;
 import org.opensearch.bootstrap.BootstrapContext;
+import org.opensearch.client.Client;
 import org.opensearch.cluster.ClusterName;
-import org.opensearch.common.breaker.CircuitBreaker;
+import org.opensearch.cluster.metadata.IndexNameExpressionResolver;
+import org.opensearch.cluster.node.DiscoveryNodeRole;
+import org.opensearch.cluster.service.ClusterService;
+import org.opensearch.common.SetOnce;
 import org.opensearch.common.network.NetworkModule;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.transport.BoundTransportAddress;
+import org.opensearch.common.settings.SettingsException;
+import org.opensearch.common.util.FeatureFlags;
+import org.opensearch.core.common.breaker.CircuitBreaker;
+import org.opensearch.core.common.io.stream.NamedWriteableRegistry;
+import org.opensearch.core.common.transport.BoundTransportAddress;
+import org.opensearch.core.common.unit.ByteSizeUnit;
+import org.opensearch.core.common.unit.ByteSizeValue;
+import org.opensearch.core.indices.breaker.CircuitBreakerService;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
 import org.opensearch.env.Environment;
+import org.opensearch.env.NodeEnvironment;
 import org.opensearch.index.IndexService;
 import org.opensearch.index.engine.Engine.Searcher;
 import org.opensearch.index.shard.IndexShard;
 import org.opensearch.indices.IndicesService;
 import org.opensearch.indices.breaker.BreakerSettings;
-import org.opensearch.indices.breaker.CircuitBreakerService;
+import org.opensearch.monitor.fs.FsInfo;
+import org.opensearch.monitor.fs.FsProbe;
 import org.opensearch.plugins.CircuitBreakerPlugin;
 import org.opensearch.plugins.Plugin;
-import org.opensearch.test.OpenSearchTestCase;
+import org.opensearch.plugins.TelemetryAwarePlugin;
+import org.opensearch.plugins.TelemetryPlugin;
+import org.opensearch.repositories.RepositoriesService;
+import org.opensearch.script.ScriptService;
+import org.opensearch.telemetry.Telemetry;
+import org.opensearch.telemetry.TelemetrySettings;
+import org.opensearch.telemetry.metrics.MetricsRegistry;
+import org.opensearch.telemetry.tracing.Tracer;
+import org.opensearch.test.FeatureFlagSetter;
 import org.opensearch.test.InternalTestCluster;
 import org.opensearch.test.MockHttpTransport;
+import org.opensearch.test.NodeRoles;
+import org.opensearch.test.OpenSearchTestCase;
 import org.opensearch.threadpool.ThreadPool;
+import org.opensearch.watcher.ResourceWatcherService;
 
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 import static org.opensearch.cluster.metadata.IndexMetadata.SETTING_NUMBER_OF_REPLICAS;
 import static org.opensearch.cluster.metadata.IndexMetadata.SETTING_NUMBER_OF_SHARDS;
+import static org.opensearch.test.NodeRoles.addRoles;
 import static org.opensearch.test.NodeRoles.dataNode;
 import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertAcked;
 import static org.hamcrest.Matchers.containsString;
@@ -343,6 +372,129 @@ public class NodeTests extends OpenSearchTestCase {
                 ((MockCircuitBreakerPlugin) breakerPlugin).myCircuitBreaker.get(),
                 service.getBreaker("test_breaker")
             );
+        }
+    }
+
+    public void testCreateWithFileCache() throws Exception {
+        Settings searchRoleSettings = addRoles(baseSettings().build(), Set.of(DiscoveryNodeRole.SEARCH_ROLE));
+        List<Class<? extends Plugin>> plugins = basePlugins();
+        ByteSizeValue cacheSize = new ByteSizeValue(16, ByteSizeUnit.GB);
+        Settings searchRoleSettingsWithConfig = baseSettings().put(searchRoleSettings)
+            .put(Node.NODE_SEARCH_CACHE_SIZE_SETTING.getKey(), cacheSize.toString())
+            .build();
+        Settings onlySearchRoleSettings = Settings.builder()
+            .put(searchRoleSettingsWithConfig)
+            .put(
+                NodeRoles.removeRoles(
+                    searchRoleSettingsWithConfig,
+                    Set.of(
+                        DiscoveryNodeRole.DATA_ROLE,
+                        DiscoveryNodeRole.CLUSTER_MANAGER_ROLE,
+                        DiscoveryNodeRole.INGEST_ROLE,
+                        DiscoveryNodeRole.REMOTE_CLUSTER_CLIENT_ROLE
+                    )
+                )
+            )
+            .build();
+
+        // Test exception thrown with configuration missing
+        assertThrows(SettingsException.class, () -> new MockNode(searchRoleSettings, plugins));
+
+        // Test file cache is initialized
+        try (MockNode mockNode = new MockNode(searchRoleSettingsWithConfig, plugins)) {
+            NodeEnvironment.NodePath fileCacheNodePath = mockNode.getNodeEnvironment().fileCacheNodePath();
+            assertEquals(cacheSize.getBytes(), fileCacheNodePath.fileCacheReservedSize.getBytes());
+        }
+
+        // Test data + search node with defined cache size
+        try (MockNode mockNode = new MockNode(searchRoleSettingsWithConfig, plugins)) {
+            NodeEnvironment.NodePath fileCacheNodePath = mockNode.getNodeEnvironment().fileCacheNodePath();
+            assertEquals(cacheSize.getBytes(), fileCacheNodePath.fileCacheReservedSize.getBytes());
+        }
+
+        // Test dedicated search node with no configuration
+        try (MockNode mockNode = new MockNode(onlySearchRoleSettings, plugins)) {
+            NodeEnvironment.NodePath fileCacheNodePath = mockNode.getNodeEnvironment().fileCacheNodePath();
+            assertTrue(fileCacheNodePath.fileCacheReservedSize.getBytes() > 0);
+            FsProbe fsProbe = new FsProbe(mockNode.getNodeEnvironment(), mockNode.fileCache());
+            FsInfo fsInfo = fsProbe.stats(null);
+            FsInfo.Path cachePathInfo = fsInfo.iterator().next();
+            assertEquals(cachePathInfo.getFileCacheReserved().getBytes(), fileCacheNodePath.fileCacheReservedSize.getBytes());
+        }
+    }
+
+    public void testTelemetryAwarePlugins() throws IOException {
+        Settings.Builder settings = baseSettings();
+        List<Class<? extends Plugin>> plugins = basePlugins();
+        plugins.add(MockTelemetryAwarePlugin.class);
+        try (Node node = new MockNode(settings.build(), plugins)) {
+            MockTelemetryAwareComponent mockTelemetryAwareComponent = node.injector().getInstance(MockTelemetryAwareComponent.class);
+            assertNotNull(mockTelemetryAwareComponent.getTracer());
+            assertNotNull(mockTelemetryAwareComponent.getMetricsRegistry());
+            TelemetryAwarePlugin telemetryAwarePlugin = node.getPluginsService().filterPlugins(TelemetryAwarePlugin.class).get(0);
+            assertTrue(telemetryAwarePlugin instanceof MockTelemetryAwarePlugin);
+        }
+    }
+
+    public void testTelemetryPluginShouldNOTImplementTelemetryAwarePlugin() throws IOException {
+        Settings.Builder settings = baseSettings();
+        List<Class<? extends Plugin>> plugins = basePlugins();
+        plugins.add(MockTelemetryPlugin.class);
+        FeatureFlagSetter.set(FeatureFlags.TELEMETRY);
+        settings.put(TelemetrySettings.TRACER_FEATURE_ENABLED_SETTING.getKey(), true);
+        assertThrows(IllegalStateException.class, () -> new MockNode(settings.build(), plugins));
+    }
+
+    private static class MockTelemetryAwareComponent {
+        private final Tracer tracer;
+        private final MetricsRegistry metricsRegistry;
+
+        public MockTelemetryAwareComponent(Tracer tracer, MetricsRegistry metricsRegistry) {
+            this.tracer = tracer;
+            this.metricsRegistry = metricsRegistry;
+        }
+
+        public Tracer getTracer() {
+            return tracer;
+        }
+
+        public MetricsRegistry getMetricsRegistry() {
+            return metricsRegistry;
+        }
+    }
+
+    public static class MockTelemetryAwarePlugin extends Plugin implements TelemetryAwarePlugin {
+        @Override
+        public Collection<Object> createComponents(
+            Client client,
+            ClusterService clusterService,
+            ThreadPool threadPool,
+            ResourceWatcherService resourceWatcherService,
+            ScriptService scriptService,
+            NamedXContentRegistry xContentRegistry,
+            Environment environment,
+            NodeEnvironment nodeEnvironment,
+            NamedWriteableRegistry namedWriteableRegistry,
+            IndexNameExpressionResolver indexNameExpressionResolver,
+            Supplier<RepositoriesService> repositoriesServiceSupplier,
+            Tracer tracer,
+            MetricsRegistry metricsRegistry
+        ) {
+            return List.of(new MockTelemetryAwareComponent(tracer, metricsRegistry));
+        }
+
+    }
+
+    public static class MockTelemetryPlugin extends Plugin implements TelemetryPlugin, TelemetryAwarePlugin {
+
+        @Override
+        public Optional<Telemetry> getTelemetry(TelemetrySettings telemetrySettings) {
+            return Optional.empty();
+        }
+
+        @Override
+        public String getName() {
+            return null;
         }
     }
 

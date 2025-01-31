@@ -33,7 +33,6 @@
 package org.opensearch.action.support.broadcast;
 
 import org.apache.logging.log4j.message.ParameterizedMessage;
-import org.opensearch.action.ActionListener;
 import org.opensearch.action.ActionRunnable;
 import org.opensearch.action.NoShardAvailableActionException;
 import org.opensearch.action.support.ActionFilters;
@@ -44,13 +43,15 @@ import org.opensearch.cluster.block.ClusterBlockException;
 import org.opensearch.cluster.metadata.IndexNameExpressionResolver;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.node.DiscoveryNodes;
+import org.opensearch.cluster.routing.FailAwareWeightedRouting;
 import org.opensearch.cluster.routing.GroupShardsIterator;
 import org.opensearch.cluster.routing.ShardIterator;
 import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.Nullable;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.Writeable;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.Writeable;
 import org.opensearch.tasks.Task;
 import org.opensearch.threadpool.ThreadPool;
 import org.opensearch.transport.TransportChannel;
@@ -250,7 +251,9 @@ public abstract class TransportBroadcastAction<
             // we set the shard failure always, even if its the first in the replication group, and the next one
             // will work (it will just override it...)
             setFailure(shardIt, shardIndex, e);
-            ShardRouting nextShard = shardIt.nextOrNull();
+            ShardRouting nextShard = FailAwareWeightedRouting.getInstance()
+                .findNext(shardIt, clusterService.state(), e, () -> counterOps.incrementAndGet());
+
             if (nextShard != null) {
                 if (e != null) {
                     if (logger.isTraceEnabled()) {

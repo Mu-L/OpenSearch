@@ -33,8 +33,6 @@
 package org.opensearch.action.support.single.shard;
 
 import org.apache.logging.log4j.message.ParameterizedMessage;
-import org.opensearch.action.ActionListener;
-import org.opensearch.action.ActionResponse;
 import org.opensearch.action.ActionRunnable;
 import org.opensearch.action.NoShardAvailableActionException;
 import org.opensearch.action.support.ActionFilters;
@@ -47,14 +45,17 @@ import org.opensearch.cluster.block.ClusterBlockLevel;
 import org.opensearch.cluster.metadata.IndexNameExpressionResolver;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.node.DiscoveryNodes;
+import org.opensearch.cluster.routing.FailAwareWeightedRouting;
 import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.cluster.routing.ShardsIterator;
 import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.Nullable;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.Writeable;
-import org.opensearch.common.logging.LoggerMessageFormat;
-import org.opensearch.index.shard.ShardId;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.action.ActionResponse;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.common.logging.LoggerMessageFormat;
+import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.tasks.Task;
 import org.opensearch.threadpool.ThreadPool;
 import org.opensearch.transport.TransportChannel;
@@ -244,7 +245,9 @@ public abstract class TransportSingleShardAction<Request extends SingleShardRequ
                 lastFailure = currentFailure;
                 this.lastFailure = currentFailure;
             }
-            final ShardRouting shardRouting = shardIt.nextOrNull();
+            ShardRouting shardRouting = FailAwareWeightedRouting.getInstance()
+                .findNext(shardIt, clusterService.state(), currentFailure, () -> {});
+
             if (shardRouting == null) {
                 Exception failure = lastFailure;
                 if (failure == null || isShardNotAvailableException(failure)) {
@@ -273,6 +276,7 @@ public abstract class TransportSingleShardAction<Request extends SingleShardRequ
                     );
                 }
                 final Writeable.Reader<Response> reader = getResponseReader();
+                ShardRouting finalShardRouting = shardRouting;
                 transportService.sendRequest(
                     node,
                     transportShardAction,
@@ -296,7 +300,7 @@ public abstract class TransportSingleShardAction<Request extends SingleShardRequ
 
                         @Override
                         public void handleException(TransportException exp) {
-                            onFailure(shardRouting, exp);
+                            onFailure(finalShardRouting, exp);
                         }
                     }
                 );

@@ -32,22 +32,27 @@
 
 package org.opensearch.action.admin.cluster.health;
 
-import org.opensearch.action.ActionResponse;
+import org.opensearch.Version;
 import org.opensearch.cluster.ClusterState;
+import org.opensearch.cluster.awarenesshealth.ClusterAwarenessHealth;
 import org.opensearch.cluster.health.ClusterHealthStatus;
 import org.opensearch.cluster.health.ClusterIndexHealth;
 import org.opensearch.cluster.health.ClusterStateHealth;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.Strings;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
+import org.opensearch.common.annotation.PublicApi;
+import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.unit.TimeValue;
-import org.opensearch.common.xcontent.ConstructingObjectParser;
-import org.opensearch.common.xcontent.ObjectParser;
 import org.opensearch.common.xcontent.StatusToXContentObject;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
-import org.opensearch.rest.RestStatus;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.action.ActionResponse;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.rest.RestStatus;
+import org.opensearch.core.xcontent.ConstructingObjectParser;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.ObjectParser;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -57,14 +62,15 @@ import java.util.Map;
 import java.util.Objects;
 
 import static java.util.Collections.emptyMap;
-import static org.opensearch.common.xcontent.ConstructingObjectParser.constructorArg;
-import static org.opensearch.common.xcontent.ConstructingObjectParser.optionalConstructorArg;
+import static org.opensearch.core.xcontent.ConstructingObjectParser.constructorArg;
+import static org.opensearch.core.xcontent.ConstructingObjectParser.optionalConstructorArg;
 
 /**
  * Transport response for Cluster Health
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class ClusterHealthResponse extends ActionResponse implements StatusToXContentObject {
     private static final String CLUSTER_NAME = "cluster_name";
     private static final String STATUS = "status";
@@ -187,6 +193,7 @@ public class ClusterHealthResponse extends ActionResponse implements StatusToXCo
     private boolean timedOut = false;
     private ClusterStateHealth clusterStateHealth;
     private ClusterHealthStatus clusterHealthStatus;
+    private ClusterAwarenessHealth clusterAwarenessHealth;
 
     public ClusterHealthResponse() {}
 
@@ -200,6 +207,11 @@ public class ClusterHealthResponse extends ActionResponse implements StatusToXCo
         numberOfInFlightFetch = in.readInt();
         delayedUnassignedShards = in.readInt();
         taskMaxWaitingTime = in.readTimeValue();
+        if (in.getVersion().onOrAfter(Version.V_2_5_0)) {
+            if (in.readBoolean()) {
+                clusterAwarenessHealth = new ClusterAwarenessHealth(in);
+            }
+        }
     }
 
     /** needed for plugins BWC */
@@ -223,6 +235,73 @@ public class ClusterHealthResponse extends ActionResponse implements StatusToXCo
         this.taskMaxWaitingTime = taskMaxWaitingTime;
         this.clusterStateHealth = new ClusterStateHealth(clusterState, concreteIndices);
         this.clusterHealthStatus = clusterStateHealth.getStatus();
+    }
+
+    public ClusterHealthResponse(
+        String clusterName,
+        String[] concreteIndices,
+        ClusterHealthRequest clusterHealthRequest,
+        ClusterState clusterState,
+        int numberOfPendingTasks,
+        int numberOfInFlightFetch,
+        TimeValue taskMaxWaitingTime
+    ) {
+        this.clusterName = clusterName;
+        this.numberOfPendingTasks = numberOfPendingTasks;
+        this.numberOfInFlightFetch = numberOfInFlightFetch;
+        this.taskMaxWaitingTime = taskMaxWaitingTime;
+        this.clusterStateHealth = clusterHealthRequest.isApplyLevelAtTransportLayer()
+            ? new ClusterStateHealth(clusterState, concreteIndices, clusterHealthRequest.level())
+            : new ClusterStateHealth(clusterState, concreteIndices);
+        this.clusterHealthStatus = clusterStateHealth.getStatus();
+        this.delayedUnassignedShards = clusterStateHealth.getDelayedUnassignedShards();
+    }
+
+    // Awareness Attribute health
+    public ClusterHealthResponse(
+        String clusterName,
+        ClusterState clusterState,
+        ClusterSettings clusterSettings,
+        String[] concreteIndices,
+        String awarenessAttributeName,
+        int numberOfPendingTasks,
+        int numberOfInFlightFetch,
+        int delayedUnassignedShards,
+        TimeValue taskMaxWaitingTime
+    ) {
+        this(
+            clusterName,
+            concreteIndices,
+            clusterState,
+            numberOfPendingTasks,
+            numberOfInFlightFetch,
+            delayedUnassignedShards,
+            taskMaxWaitingTime
+        );
+        this.clusterAwarenessHealth = new ClusterAwarenessHealth(clusterState, clusterSettings, awarenessAttributeName);
+    }
+
+    public ClusterHealthResponse(
+        String clusterName,
+        ClusterHealthRequest clusterHealthRequest,
+        ClusterState clusterState,
+        ClusterSettings clusterSettings,
+        String[] concreteIndices,
+        String awarenessAttributeName,
+        int numberOfPendingTasks,
+        int numberOfInFlightFetch,
+        TimeValue taskMaxWaitingTime
+    ) {
+        this(
+            clusterName,
+            concreteIndices,
+            clusterHealthRequest,
+            clusterState,
+            numberOfPendingTasks,
+            numberOfInFlightFetch,
+            taskMaxWaitingTime
+        );
+        this.clusterAwarenessHealth = new ClusterAwarenessHealth(clusterState, clusterSettings, awarenessAttributeName);
     }
 
     /**
@@ -288,12 +367,6 @@ public class ClusterHealthResponse extends ActionResponse implements StatusToXCo
         return clusterStateHealth.hasDiscoveredClusterManager();
     }
 
-    /** @deprecated As of 2.2, because supporting inclusive language, replaced by {@link #hasDiscoveredClusterManager()} */
-    @Deprecated
-    public boolean hasDiscoveredMaster() {
-        return hasDiscoveredClusterManager();
-    }
-
     public int getNumberOfPendingTasks() {
         return this.numberOfPendingTasks;
     }
@@ -357,6 +430,10 @@ public class ClusterHealthResponse extends ActionResponse implements StatusToXCo
         return clusterStateHealth.getActiveShardsPercent();
     }
 
+    public ClusterAwarenessHealth getClusterAwarenessHealth() {
+        return clusterAwarenessHealth;
+    }
+
     public static ClusterHealthResponse readResponseFrom(StreamInput in) throws IOException {
         return new ClusterHealthResponse(in);
     }
@@ -371,11 +448,19 @@ public class ClusterHealthResponse extends ActionResponse implements StatusToXCo
         out.writeInt(numberOfInFlightFetch);
         out.writeInt(delayedUnassignedShards);
         out.writeTimeValue(taskMaxWaitingTime);
+        if (out.getVersion().onOrAfter(Version.V_2_5_0)) {
+            if (clusterAwarenessHealth != null) {
+                out.writeBoolean(true);
+                clusterAwarenessHealth.writeTo(out);
+            } else {
+                out.writeBoolean(false);
+            }
+        }
     }
 
     @Override
     public String toString() {
-        return Strings.toString(this);
+        return Strings.toString(MediaTypeRegistry.JSON, this);
     }
 
     @Override
@@ -406,6 +491,7 @@ public class ClusterHealthResponse extends ActionResponse implements StatusToXCo
 
         String level = params.param("level", "cluster");
         boolean outputIndices = "indices".equals(level) || "shards".equals(level);
+        boolean outputAwarenessHealth = "awareness_attributes".equals(level);
 
         if (outputIndices) {
             builder.startObject(INDICES);
@@ -414,6 +500,11 @@ public class ClusterHealthResponse extends ActionResponse implements StatusToXCo
             }
             builder.endObject();
         }
+
+        if (outputAwarenessHealth && clusterAwarenessHealth != null) {
+            clusterAwarenessHealth.toXContent(builder, params);
+        }
+
         builder.endObject();
         return builder;
     }

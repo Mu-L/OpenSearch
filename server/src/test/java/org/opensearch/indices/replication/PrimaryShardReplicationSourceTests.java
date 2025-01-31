@@ -8,30 +8,27 @@
 
 package org.opensearch.indices.replication;
 
+import org.apache.lucene.codecs.Codec;
 import org.apache.lucene.util.Version;
-import org.junit.Assert;
-import org.opensearch.action.ActionListener;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.node.DiscoveryNodeRole;
 import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.util.CancellableThreads;
-import org.opensearch.core.internal.io.IOUtils;
+import org.opensearch.common.util.io.IOUtils;
+import org.opensearch.core.action.ActionListener;
 import org.opensearch.index.shard.IndexShard;
 import org.opensearch.index.shard.IndexShardTestCase;
-import org.opensearch.index.store.Store;
 import org.opensearch.index.store.StoreFileMetadata;
 import org.opensearch.indices.recovery.RecoverySettings;
 import org.opensearch.indices.replication.checkpoint.ReplicationCheckpoint;
+import org.opensearch.telemetry.tracing.noop.NoopTracer;
 import org.opensearch.test.ClusterServiceUtils;
 import org.opensearch.test.transport.CapturingTransport;
 import org.opensearch.transport.TransportService;
 
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 
 import static org.mockito.Mockito.mock;
 
@@ -50,6 +47,8 @@ public class PrimaryShardReplicationSourceTests extends IndexShardTestCase {
     private IndexShard indexShard;
     private DiscoveryNode sourceNode;
 
+    private RecoverySettings recoverySettings;
+
     @Override
     public void setUp() throws Exception {
         super.setUp();
@@ -66,13 +65,15 @@ public class PrimaryShardReplicationSourceTests extends IndexShardTestCase {
             TransportService.NOOP_TRANSPORT_INTERCEPTOR,
             boundAddress -> clusterService.localNode(),
             null,
-            Collections.emptySet()
+            Collections.emptySet(),
+            NoopTracer.INSTANCE
         );
         transportService.start();
         transportService.acceptIncomingRequests();
 
         indexShard = newStartedShard(true);
 
+        this.recoverySettings = recoverySettings;
         replicationSource = new PrimaryShardReplicationSource(
             localNode,
             indexShard.routingEntry().allocationId().toString(),
@@ -94,8 +95,8 @@ public class PrimaryShardReplicationSourceTests extends IndexShardTestCase {
             indexShard.shardId(),
             PRIMARY_TERM,
             SEGMENTS_GEN,
-            SEQ_NO,
-            VERSION
+            VERSION,
+            Codec.getDefault().getName()
         );
         replicationSource.getCheckpointMetadata(REPLICATION_ID, checkpoint, mock(ActionListener.class));
         CapturingTransport.CapturedRequest[] requestList = transport.getCapturedRequestsAndClear();
@@ -111,15 +112,16 @@ public class PrimaryShardReplicationSourceTests extends IndexShardTestCase {
             indexShard.shardId(),
             PRIMARY_TERM,
             SEGMENTS_GEN,
-            SEQ_NO,
-            VERSION
+            VERSION,
+            Codec.getDefault().getName()
         );
         StoreFileMetadata testMetadata = new StoreFileMetadata("testFile", 1L, "checksum", Version.LATEST);
         replicationSource.getSegmentFiles(
             REPLICATION_ID,
             checkpoint,
             Arrays.asList(testMetadata),
-            mock(Store.class),
+            mock(IndexShard.class),
+            (fileName, bytesRecovered) -> {},
             mock(ActionListener.class)
         );
         CapturingTransport.CapturedRequest[] requestList = transport.getCapturedRequestsAndClear();
@@ -130,37 +132,33 @@ public class PrimaryShardReplicationSourceTests extends IndexShardTestCase {
         assertTrue(capturedRequest.request instanceof GetSegmentFilesRequest);
     }
 
-    public void testGetSegmentFiles_CancelWhileRequestOpen() throws InterruptedException {
-        CountDownLatch latch = new CountDownLatch(1);
+    /**
+     * This test verifies the transport request timeout value for fetching the segment files.
+     */
+    public void testTransportTimeoutForGetSegmentFilesAction() {
+        long fileSize = (long) (Math.pow(10, 9));
         final ReplicationCheckpoint checkpoint = new ReplicationCheckpoint(
             indexShard.shardId(),
             PRIMARY_TERM,
             SEGMENTS_GEN,
-            SEQ_NO,
-            VERSION
+            VERSION,
+            Codec.getDefault().getName()
         );
-        StoreFileMetadata testMetadata = new StoreFileMetadata("testFile", 1L, "checksum", Version.LATEST);
+        StoreFileMetadata testMetadata = new StoreFileMetadata("testFile", fileSize, "checksum", Version.LATEST);
         replicationSource.getSegmentFiles(
             REPLICATION_ID,
             checkpoint,
             Arrays.asList(testMetadata),
-            mock(Store.class),
-            new ActionListener<>() {
-                @Override
-                public void onResponse(GetSegmentFilesResponse getSegmentFilesResponse) {
-                    Assert.fail("onFailure response expected.");
-                }
-
-                @Override
-                public void onFailure(Exception e) {
-                    assertEquals(e.getClass(), CancellableThreads.ExecutionCancelledException.class);
-                    latch.countDown();
-                }
-            }
+            mock(IndexShard.class),
+            (fileName, bytesRecovered) -> {},
+            mock(ActionListener.class)
         );
-        replicationSource.cancel();
-        latch.await(2, TimeUnit.SECONDS);
-        assertEquals("listener should have resolved in a failure", 0, latch.getCount());
+        CapturingTransport.CapturedRequest[] requestList = transport.getCapturedRequestsAndClear();
+        assertEquals(1, requestList.length);
+        CapturingTransport.CapturedRequest capturedRequest = requestList[0];
+        assertEquals(SegmentReplicationSourceService.Actions.GET_SEGMENT_FILES, capturedRequest.action);
+        assertEquals(sourceNode, capturedRequest.node);
+        assertEquals(recoverySettings.internalActionLongTimeout(), capturedRequest.options.timeout());
     }
 
     private DiscoveryNode newDiscoveryNode(String nodeName) {

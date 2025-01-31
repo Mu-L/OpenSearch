@@ -39,9 +39,13 @@ import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.ValidationException;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.index.Index;
+import org.opensearch.core.index.Index;
 
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -50,7 +54,7 @@ import static org.opensearch.cluster.metadata.IndexMetadata.INDEX_NUMBER_OF_SHAR
 /**
  * This class contains the logic used to check the cluster-wide shard limit before shards are created and ensuring that the limit is
  * updated correctly on setting updates, etc.
- *
+ * <p>
  * NOTE: This is the limit applied at *shard creation time*. If you are looking for the limit applied at *allocation* time, which is
  * controlled by a different setting,
  * see {@link org.opensearch.cluster.routing.allocation.decider.ShardsLimitAllocationDecider}.
@@ -58,10 +62,22 @@ import static org.opensearch.cluster.metadata.IndexMetadata.INDEX_NUMBER_OF_SHAR
  * @opensearch.internal
  */
 public class ShardLimitValidator {
+
+    public static final String SETTING_MAX_SHARDS_PER_CLUSTER_KEY = "cluster.routing.allocation.total_shards_limit";
     public static final Setting<Integer> SETTING_CLUSTER_MAX_SHARDS_PER_NODE = Setting.intSetting(
         "cluster.max_shards_per_node",
         1000,
         1,
+        new MaxShardPerNodeLimitValidator(),
+        Setting.Property.Dynamic,
+        Setting.Property.NodeScope
+    );
+
+    public static final Setting<Integer> SETTING_CLUSTER_MAX_SHARDS_PER_CLUSTER = Setting.intSetting(
+        SETTING_MAX_SHARDS_PER_CLUSTER_KEY,
+        -1,
+        -1,
+        new MaxShardPerClusterLimitValidator(),
         Setting.Property.Dynamic,
         Setting.Property.NodeScope
     );
@@ -74,13 +90,17 @@ public class ShardLimitValidator {
     );
 
     protected final AtomicInteger shardLimitPerNode = new AtomicInteger();
+    protected final AtomicInteger shardLimitPerCluster = new AtomicInteger();
     private final SystemIndices systemIndices;
     private volatile boolean ignoreDotIndexes;
 
     public ShardLimitValidator(final Settings settings, ClusterService clusterService, SystemIndices systemIndices) {
         this.shardLimitPerNode.set(SETTING_CLUSTER_MAX_SHARDS_PER_NODE.get(settings));
+        this.shardLimitPerCluster.set(SETTING_CLUSTER_MAX_SHARDS_PER_CLUSTER.get(settings));
         this.ignoreDotIndexes = SETTING_CLUSTER_IGNORE_DOT_INDEXES.get(settings);
         clusterService.getClusterSettings().addSettingsUpdateConsumer(SETTING_CLUSTER_MAX_SHARDS_PER_NODE, this::setShardLimitPerNode);
+        clusterService.getClusterSettings()
+            .addSettingsUpdateConsumer(SETTING_CLUSTER_MAX_SHARDS_PER_CLUSTER, this::setShardLimitPerCluster);
         clusterService.getClusterSettings().addSettingsUpdateConsumer(SETTING_CLUSTER_IGNORE_DOT_INDEXES, this::setIgnoreDotIndexes);
         this.systemIndices = systemIndices;
     }
@@ -89,12 +109,24 @@ public class ShardLimitValidator {
         this.shardLimitPerNode.set(newValue);
     }
 
+    private void setShardLimitPerCluster(int newValue) {
+        this.shardLimitPerCluster.set(newValue);
+    }
+
     /**
      * Gets the currently configured value of the {@link ShardLimitValidator#SETTING_CLUSTER_MAX_SHARDS_PER_NODE} setting.
      * @return the current value of the setting
      */
     public int getShardLimitPerNode() {
         return shardLimitPerNode.get();
+    }
+
+    /**
+     * Gets the currently configured value of the {@link ShardLimitValidator#SETTING_CLUSTER_MAX_SHARDS_PER_CLUSTER} setting.
+     * @return the current value of the setting.
+     */
+    public int getShardLimitPerCluster() {
+        return shardLimitPerCluster.get();
     }
 
     private void setIgnoreDotIndexes(boolean newValue) {
@@ -211,11 +243,16 @@ public class ShardLimitValidator {
      * an operation. If empty, a sign that the operation is valid.
      */
     public Optional<String> checkShardLimit(int newShards, ClusterState state) {
-        return checkShardLimit(newShards, state, getShardLimitPerNode());
+        return checkShardLimit(newShards, state, getShardLimitPerNode(), getShardLimitPerCluster());
     }
 
     // package-private for testing
-    static Optional<String> checkShardLimit(int newShards, ClusterState state, int maxShardsPerNodeSetting) {
+    static Optional<String> checkShardLimit(
+        int newShards,
+        ClusterState state,
+        int maxShardsPerNodeSetting,
+        int maxShardsPerClusterSetting
+    ) {
         int nodeCount = state.getNodes().getDataNodes().size();
 
         // Only enforce the shard limit if we have at least one data node, so that we don't block
@@ -223,10 +260,16 @@ public class ShardLimitValidator {
         if (nodeCount == 0 || newShards < 0) {
             return Optional.empty();
         }
-        int maxShardsPerNode = maxShardsPerNodeSetting;
-        int maxShardsInCluster = maxShardsPerNode * nodeCount;
-        int currentOpenShards = state.getMetadata().getTotalOpenIndexShards();
 
+        int computedMaxShards = (int) Math.min(Integer.MAX_VALUE, (long) maxShardsPerNodeSetting * nodeCount);
+        int maxShardsInCluster = maxShardsPerClusterSetting;
+        if (maxShardsInCluster == -1) {
+            maxShardsInCluster = computedMaxShards;
+        } else {
+            maxShardsInCluster = Math.min(maxShardsInCluster, computedMaxShards);
+        }
+
+        long currentOpenShards = state.getMetadata().getTotalOpenIndexShards();
         if ((currentOpenShards + newShards) > maxShardsInCluster) {
             String errorMessage = "this action would add ["
                 + newShards
@@ -238,5 +281,55 @@ public class ShardLimitValidator {
             return Optional.of(errorMessage);
         }
         return Optional.empty();
+    }
+
+    /**
+     * Validates the MaxShadPerCluster threshold.
+     */
+    static final class MaxShardPerClusterLimitValidator implements Setting.Validator<Integer> {
+
+        @Override
+        public void validate(Integer value) {}
+
+        @Override
+        public void validate(Integer maxShardPerCluster, Map<Setting<?>, Object> settings) {
+            final int maxShardPerNode = (int) settings.get(SETTING_CLUSTER_MAX_SHARDS_PER_NODE);
+            doValidate(maxShardPerCluster, maxShardPerNode);
+        }
+
+        @Override
+        public Iterator<Setting<?>> settings() {
+            final List<Setting<?>> settings = Collections.singletonList(SETTING_CLUSTER_MAX_SHARDS_PER_NODE);
+            return settings.iterator();
+        }
+    }
+
+    /**
+     * Validates the MaxShadPerNode threshold.
+     */
+    static final class MaxShardPerNodeLimitValidator implements Setting.Validator<Integer> {
+
+        @Override
+        public void validate(Integer value) {}
+
+        @Override
+        public void validate(Integer maxShardPerNode, Map<Setting<?>, Object> settings) {
+            final int maxShardPerCluster = (int) settings.get(SETTING_CLUSTER_MAX_SHARDS_PER_CLUSTER);
+            doValidate(maxShardPerCluster, maxShardPerNode);
+        }
+
+        @Override
+        public Iterator<Setting<?>> settings() {
+            final List<Setting<?>> settings = Collections.singletonList(SETTING_CLUSTER_MAX_SHARDS_PER_CLUSTER);
+            return settings.iterator();
+        }
+    }
+
+    private static void doValidate(final int maxShardPerCluster, final int maxShardPerNode) {
+        if (maxShardPerCluster != -1 && maxShardPerCluster < maxShardPerNode) {
+            throw new IllegalArgumentException(
+                "MaxShardPerCluster " + maxShardPerCluster + " should be greater than or equal to MaxShardPerNode " + maxShardPerNode
+            );
+        }
     }
 }

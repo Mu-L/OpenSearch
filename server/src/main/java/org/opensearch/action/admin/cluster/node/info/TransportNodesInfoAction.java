@@ -37,8 +37,8 @@ import org.opensearch.action.support.ActionFilters;
 import org.opensearch.action.support.nodes.TransportNodesAction;
 import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.inject.Inject;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
 import org.opensearch.node.NodeService;
 import org.opensearch.threadpool.ThreadPool;
 import org.opensearch.transport.TransportRequest;
@@ -117,7 +117,8 @@ public class TransportNodesInfoAction extends TransportNodesAction<
             metrics.contains(NodesInfoRequest.Metric.PLUGINS.metricName()),
             metrics.contains(NodesInfoRequest.Metric.INGEST.metricName()),
             metrics.contains(NodesInfoRequest.Metric.AGGREGATIONS.metricName()),
-            metrics.contains(NodesInfoRequest.Metric.INDICES.metricName())
+            metrics.contains(NodesInfoRequest.Metric.INDICES.metricName()),
+            metrics.contains(NodesInfoRequest.Metric.SEARCH_PIPELINES.metricName())
         );
     }
 
@@ -128,7 +129,7 @@ public class TransportNodesInfoAction extends TransportNodesAction<
      */
     public static class NodeInfoRequest extends TransportRequest {
 
-        NodesInfoRequest request;
+        protected NodesInfoRequest request;
 
         public NodeInfoRequest(StreamInput in) throws IOException {
             super(in);

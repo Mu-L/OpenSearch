@@ -32,21 +32,38 @@
 
 package org.opensearch.index;
 
+import com.carrotsearch.randomizedtesting.annotations.ParametersFactory;
+
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.SortField;
 import org.apache.lucene.search.SortedNumericSortField;
 import org.apache.lucene.search.SortedSetSortField;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.test.OpenSearchIntegTestCase;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.test.ParameterizedStaticSettingsOpenSearchIntegTestCase;
 
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.Collection;
 
 import static org.opensearch.common.xcontent.XContentFactory.jsonBuilder;
+import static org.opensearch.search.SearchService.CLUSTER_CONCURRENT_SEGMENT_SEARCH_SETTING;
 import static org.hamcrest.Matchers.containsString;
 
-public class IndexSortIT extends OpenSearchIntegTestCase {
+public class IndexSortIT extends ParameterizedStaticSettingsOpenSearchIntegTestCase {
     private static final XContentBuilder TEST_MAPPING = createTestMapping();
+
+    public IndexSortIT(Settings staticSettings) {
+        super(staticSettings);
+    }
+
+    @ParametersFactory
+    public static Collection<Object[]> parameters() {
+        return Arrays.asList(
+            new Object[] { Settings.builder().put(CLUSTER_CONCURRENT_SEGMENT_SEARCH_SETTING.getKey(), false).build() },
+            new Object[] { Settings.builder().put(CLUSTER_CONCURRENT_SEGMENT_SEARCH_SETTING.getKey(), true).build() }
+        );
+    }
 
     private static XContentBuilder createTestMapping() {
         try {
@@ -81,8 +98,8 @@ public class IndexSortIT extends OpenSearchIntegTestCase {
     public void testIndexSort() {
         SortField dateSort = new SortedNumericSortField("date", SortField.Type.LONG, false);
         dateSort.setMissingValue(Long.MAX_VALUE);
-        SortField numericSort = new SortedNumericSortField("numeric_dv", SortField.Type.LONG, false);
-        numericSort.setMissingValue(Long.MAX_VALUE);
+        SortField numericSort = new SortedNumericSortField("numeric_dv", SortField.Type.INT, false);
+        numericSort.setMissingValue(Integer.MAX_VALUE);
         SortField keywordSort = new SortedSetSortField("keyword_dv", false);
         keywordSort.setMissingValue(SortField.STRING_LAST);
         Sort indexSort = new Sort(dateSort, numericSort, keywordSort);

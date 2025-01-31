@@ -8,12 +8,12 @@
 
 package org.opensearch.search.aggregations.bucket.terms;
 
-import org.opensearch.common.ParseField;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
 import org.opensearch.common.xcontent.LoggingDeprecationHandler;
-import org.opensearch.common.xcontent.ObjectParser;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.xcontent.ObjectParser;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.index.query.QueryShardContext;
 import org.opensearch.search.aggregations.AbstractAggregationBuilder;
 import org.opensearch.search.aggregations.AggregationBuilder;
@@ -51,10 +51,15 @@ import static org.opensearch.search.aggregations.bucket.terms.TermsAggregationBu
  *           },{
  *             "field": "host"
  *           }],
- *           "order": {"max-cpu": "desc"}
+ *           "order": [{
+ *             "max-cpu": "desc"
+ *           },{
+ *             "max-memory": "desc"
+ *           }]
  *         },
  *         "aggs": {
- *           "max-cpu": { "max": { "field": "cpu" } }
+ *           "max-cpu": { "max": { "field": "cpu" } },
+ *           "max-memory": { "max": { "field": "memory" } }
  *         }
  *       }
  *     }
@@ -80,6 +85,9 @@ import static org.opensearch.search.aggregations.bucket.terms.TermsAggregationBu
  *           "doc_count": 2,
  *           "max-cpu": {
  *             "value": 90.0
+ *           },
+ *           "max-memory": {
+ *             "value": 80.0
  *           }
  *         },
  *         {
@@ -91,6 +99,9 @@ import static org.opensearch.search.aggregations.bucket.terms.TermsAggregationBu
  *           "doc_count": 2,
  *           "max-cpu": {
  *             "value": 70.0
+ *           },
+ *           "max-memory": {
+ *             "value": 90.0
  *           }
  *         }
  *       ]

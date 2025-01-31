@@ -34,13 +34,14 @@ package org.opensearch.action.admin.indices.stats;
 
 import org.apache.lucene.store.AlreadyClosedException;
 import org.opensearch.common.Nullable;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.io.stream.Writeable;
-import org.opensearch.common.unit.ByteSizeValue;
-import org.opensearch.common.xcontent.ToXContent;
-import org.opensearch.common.xcontent.ToXContentFragment;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.common.annotation.PublicApi;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.common.unit.ByteSizeValue;
+import org.opensearch.core.xcontent.ToXContent;
+import org.opensearch.core.xcontent.ToXContentFragment;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.index.cache.query.QueryCacheStats;
 import org.opensearch.index.cache.request.RequestCacheStats;
 import org.opensearch.index.engine.SegmentsStats;
@@ -68,8 +69,9 @@ import java.util.stream.Stream;
 /**
  * Common Stats for OpenSearch
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class CommonStats implements Writeable, ToXContentFragment {
 
     @Nullable

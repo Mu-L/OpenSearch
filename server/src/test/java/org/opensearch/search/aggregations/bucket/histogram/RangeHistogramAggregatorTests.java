@@ -37,10 +37,10 @@ import org.apache.lucene.document.Document;
 import org.apache.lucene.document.SortedNumericDocValuesField;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexableField;
-import org.apache.lucene.tests.index.RandomIndexWriter;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.tests.index.RandomIndexWriter;
 import org.apache.lucene.util.BytesRef;
 import org.opensearch.common.CheckedConsumer;
 import org.opensearch.common.network.InetAddresses;
@@ -492,14 +492,14 @@ public class RangeHistogramAggregatorTests extends AggregatorTestCase {
             List<List<IndexableField>> docs = new ArrayList<>();
             for (int n = 0; n < 10000; n++) {
                 BytesRef outerRange = RangeType.LONG.encodeRanges(
-                    org.opensearch.common.collect.Set.of(new RangeFieldMapper.Range(RangeType.LONG, n % 100, n % 100 + 10, true, true))
+                    Set.of(new RangeFieldMapper.Range(RangeType.LONG, n % 100, n % 100 + 10, true, true))
                 );
                 BytesRef innerRange = RangeType.LONG.encodeRanges(
-                    org.opensearch.common.collect.Set.of(new RangeFieldMapper.Range(RangeType.LONG, n / 100, n / 100 + 10, true, true))
+                    Set.of(new RangeFieldMapper.Range(RangeType.LONG, n / 100, n / 100 + 10, true, true))
                 );
 
                 docs.add(
-                    org.opensearch.common.collect.List.of(
+                    List.of(
                         new BinaryDocValuesField("outer", outerRange),
                         new BinaryDocValuesField("inner", innerRange),
                         new SortedNumericDocValuesField("n", n)

@@ -8,27 +8,30 @@
 
 package org.opensearch.index.store.remote.directory;
 
+import org.apache.lucene.store.Directory;
+import org.apache.lucene.store.FSDirectory;
+import org.opensearch.common.blobstore.BlobContainer;
+import org.opensearch.index.IndexSettings;
+import org.opensearch.index.remote.RemoteStoreEnums.PathType;
+import org.opensearch.index.shard.ShardPath;
+import org.opensearch.index.snapshots.blobstore.BlobStoreIndexShardSnapshot;
+import org.opensearch.index.snapshots.blobstore.IndexShardSnapshot;
+import org.opensearch.index.store.remote.filecache.FileCache;
+import org.opensearch.index.store.remote.utils.TransferManager;
+import org.opensearch.plugins.IndexStorePlugin;
+import org.opensearch.repositories.IndexId;
+import org.opensearch.repositories.RepositoriesService;
+import org.opensearch.repositories.Repository;
+import org.opensearch.repositories.blobstore.BlobStoreRepository;
+import org.opensearch.snapshots.SnapshotId;
+import org.opensearch.threadpool.ThreadPool;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.function.Supplier;
-
-import org.apache.lucene.store.Directory;
-import org.apache.lucene.store.FSDirectory;
-import org.opensearch.common.blobstore.BlobContainer;
-import org.opensearch.common.blobstore.BlobPath;
-import org.opensearch.index.IndexSettings;
-import org.opensearch.index.shard.ShardPath;
-import org.opensearch.index.snapshots.blobstore.BlobStoreIndexShardSnapshot;
-import org.opensearch.index.store.remote.utils.TransferManager;
-import org.opensearch.plugins.IndexStorePlugin;
-import org.opensearch.repositories.RepositoriesService;
-import org.opensearch.repositories.Repository;
-import org.opensearch.repositories.blobstore.BlobStoreRepository;
-import org.opensearch.snapshots.SnapshotId;
-import org.opensearch.threadpool.ThreadPool;
 
 /**
  * Factory for a Directory implementation that can read directly from index
@@ -42,9 +45,16 @@ public final class RemoteSnapshotDirectoryFactory implements IndexStorePlugin.Di
     private final Supplier<RepositoriesService> repositoriesService;
     private final ThreadPool threadPool;
 
-    public RemoteSnapshotDirectoryFactory(Supplier<RepositoriesService> repositoriesService, ThreadPool threadPool) {
+    private final FileCache remoteStoreFileCache;
+
+    public RemoteSnapshotDirectoryFactory(
+        Supplier<RepositoriesService> repositoriesService,
+        ThreadPool threadPool,
+        FileCache remoteStoreFileCache
+    ) {
         this.repositoriesService = repositoriesService;
         this.threadPool = threadPool;
+        this.remoteStoreFileCache = remoteStoreFileCache;
     }
 
     @Override
@@ -65,9 +75,11 @@ public final class RemoteSnapshotDirectoryFactory implements IndexStorePlugin.Di
         ShardPath localShardPath,
         BlobStoreRepository blobStoreRepository
     ) throws IOException {
-        final BlobPath blobPath = new BlobPath().add("indices")
-            .add(IndexSettings.SEARCHABLE_SNAPSHOT_INDEX_ID.get(indexSettings.getSettings()))
-            .add(Integer.toString(localShardPath.getShardId().getId()));
+        // The below information like the snapshot generated indexId, shard_path_type and shardId are used for
+        // creating the shard BlobContainer. This information has been updated as per the hashed_prefix snapshots.
+        String indexId = IndexSettings.SEARCHABLE_SNAPSHOT_INDEX_ID.get(indexSettings.getSettings());
+        PathType pathType = IndexSettings.SEARCHABLE_SNAPSHOT_SHARD_PATH_TYPE.get(indexSettings.getSettings());
+        int shardId = localShardPath.getShardId().getId();
         final SnapshotId snapshotId = new SnapshotId(
             IndexSettings.SEARCHABLE_SNAPSHOT_ID_NAME.get(indexSettings.getSettings()),
             IndexSettings.SEARCHABLE_SNAPSHOT_ID_UUID.get(indexSettings.getSettings())
@@ -79,9 +91,17 @@ public final class RemoteSnapshotDirectoryFactory implements IndexStorePlugin.Di
         // this trick is needed to bypass assertions in BlobStoreRepository::assertAllowableThreadPools in case of node restart and a remote
         // index restore is invoked
         return threadPool.executor(ThreadPool.Names.SNAPSHOT).submit(() -> {
-            final BlobContainer blobContainer = blobStoreRepository.blobStore().blobContainer(blobPath);
-            final BlobStoreIndexShardSnapshot snapshot = blobStoreRepository.loadShardSnapshot(blobContainer, snapshotId);
-            TransferManager transferManager = new TransferManager(blobContainer, threadPool.executor(ThreadPool.Names.SEARCH));
+            // shardContainer(IndexId, shardId) method uses the id and pathType information to generate the blobPath and
+            // hence the blobContainer. We have used a dummy name as it plays no relevance in the blobPath generation.
+            final BlobContainer blobContainer = blobStoreRepository.shardContainer(
+                new IndexId("DUMMY", indexId, pathType.getCode()),
+                shardId
+            );
+            final IndexShardSnapshot indexShardSnapshot = blobStoreRepository.loadShardSnapshot(blobContainer, snapshotId);
+            assert indexShardSnapshot instanceof BlobStoreIndexShardSnapshot
+                : "indexShardSnapshot should be an instance of BlobStoreIndexShardSnapshot";
+            final BlobStoreIndexShardSnapshot snapshot = (BlobStoreIndexShardSnapshot) indexShardSnapshot;
+            TransferManager transferManager = new TransferManager(blobContainer::readBlob, remoteStoreFileCache);
             return new RemoteSnapshotDirectory(snapshot, localStoreDir, transferManager);
         });
     }

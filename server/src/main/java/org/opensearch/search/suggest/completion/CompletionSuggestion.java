@@ -34,14 +34,14 @@ package org.opensearch.search.suggest.completion;
 import org.apache.lucene.analysis.CharArraySet;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.util.PriorityQueue;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
 import org.opensearch.common.lucene.Lucene;
-import org.opensearch.common.text.Text;
-import org.opensearch.common.xcontent.ObjectParser;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.text.Text;
+import org.opensearch.core.xcontent.ObjectParser;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.search.SearchHit;
 import org.opensearch.search.suggest.Suggest;
 import org.opensearch.search.suggest.Suggest.Suggestion;
@@ -57,20 +57,20 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-import static org.opensearch.common.xcontent.XContentParserUtils.ensureExpectedToken;
+import static org.opensearch.core.xcontent.XContentParserUtils.ensureExpectedToken;
 import static org.opensearch.search.SearchHit.unknownMetaFieldConsumer;
 import static org.opensearch.search.suggest.Suggest.COMPARATOR;
 
 /**
  * Suggestion response for {@link CompletionSuggester} results
- *
+ * <p>
  * Response format for each entry:
  * {
  *     "text" : STRING
  *     "score" : FLOAT
  *     "contexts" : CONTEXTS
  * }
- *
+ * <p>
  * CONTEXTS : {
  *     "CONTEXT_NAME" : ARRAY,
  *     ..

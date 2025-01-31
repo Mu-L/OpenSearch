@@ -35,12 +35,12 @@ import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.opensearch.gradle.Architecture;
 import org.opensearch.gradle.DistributionDownloadPlugin;
-import org.opensearch.gradle.OpenSearchDistribution;
 import org.opensearch.gradle.FileSupplier;
 import org.opensearch.gradle.LazyPropertyList;
 import org.opensearch.gradle.LazyPropertyMap;
 import org.opensearch.gradle.LoggedExec;
 import org.opensearch.gradle.OS;
+import org.opensearch.gradle.OpenSearchDistribution;
 import org.opensearch.gradle.PropertyNormalization;
 import org.opensearch.gradle.ReaperService;
 import org.opensearch.gradle.Version;
@@ -116,7 +116,12 @@ public class OpenSearchNode implements TestClusterConfiguration {
     private static final TimeUnit NODE_UP_TIMEOUT_UNIT = TimeUnit.MINUTES;
     private static final int ADDITIONAL_CONFIG_TIMEOUT = 15;
     private static final TimeUnit ADDITIONAL_CONFIG_TIMEOUT_UNIT = TimeUnit.SECONDS;
-    private static final List<String> OVERRIDABLE_SETTINGS = Arrays.asList("path.repo", "discovery.seed_providers", "discovery.seed_hosts");
+    private static final List<String> OVERRIDABLE_SETTINGS = Arrays.asList(
+        "path.repo",
+        "discovery.seed_providers",
+        "discovery.seed_hosts",
+        "indices.breaker.total.use_real_memory"
+    );
 
     private static final int TAIL_LOG_MESSAGES_COUNT = 40;
     private static final List<String> MESSAGES_WE_DONT_CARE_ABOUT = Arrays.asList(
@@ -141,6 +146,7 @@ public class OpenSearchNode implements TestClusterConfiguration {
     private final Map<String, Configuration> pluginAndModuleConfigurations = new HashMap<>();
     private final List<Provider<File>> plugins = new ArrayList<>();
     private final List<Provider<File>> modules = new ArrayList<>();
+    private boolean extensionsEnabled = false;
     final LazyPropertyMap<String, CharSequence> settings = new LazyPropertyMap<>("Settings", this);
     private final LazyPropertyMap<String, CharSequence> keystoreSettings = new LazyPropertyMap<>("Keystore", this);
     private final LazyPropertyMap<String, File> keystoreFiles = new LazyPropertyMap<>("Keystore files", this, FileEntry::new);
@@ -159,6 +165,7 @@ public class OpenSearchNode implements TestClusterConfiguration {
     private final Path httpPortsFile;
     private final Path tmpDir;
 
+    private boolean secure = false;
     private int currentDistro = 0;
     private TestDistribution testDistribution;
     private final List<OpenSearchDistribution> distributions = new ArrayList<>();
@@ -208,12 +215,18 @@ public class OpenSearchNode implements TestClusterConfiguration {
         setTestDistribution(TestDistribution.INTEG_TEST);
         setVersion(VersionProperties.getOpenSearch());
         this.zone = zone;
+        this.credentials.add(new HashMap<>());
     }
 
     @Input
     @Optional
     public String getName() {
         return nameCustomization.apply(name);
+    }
+
+    @Internal
+    public boolean isSecure() {
+        return secure;
     }
 
     @Internal
@@ -342,6 +355,11 @@ public class OpenSearchNode implements TestClusterConfiguration {
     }
 
     @Override
+    public void extension(boolean extensionsEnabled) {
+        this.extensionsEnabled = extensionsEnabled;
+    }
+
+    @Override
     public void keystore(String key, String value) {
         keystoreSettings.put(key, value);
     }
@@ -447,6 +465,11 @@ public class OpenSearchNode implements TestClusterConfiguration {
     }
 
     @Override
+    public void setSecure(boolean secure) {
+        this.secure = secure;
+    }
+
+    @Override
     public void freeze() {
         requireNonNull(testDistribution, "null testDistribution passed when configuring test cluster `" + this + "`");
         LOGGER.info("Locking configuration of `{}`", this);
@@ -465,6 +488,18 @@ public class OpenSearchNode implements TestClusterConfiguration {
     @Override
     public synchronized void start() {
         LOGGER.info("Starting `{}`", this);
+        if (System.getProperty("tests.opensearch.secure") != null
+            && System.getProperty("tests.opensearch.secure").equalsIgnoreCase("true")) {
+            secure = true;
+        }
+        if (System.getProperty("tests.opensearch.username") != null) {
+            this.credentials.get(0).put("username", System.getProperty("tests.opensearch.username"));
+            LOGGER.info("Overwriting username to: " + this.getCredentials().get(0).get("username"));
+        }
+        if (System.getProperty("tests.opensearch.password") != null) {
+            this.credentials.get(0).put("password", System.getProperty("tests.opensearch.password"));
+            LOGGER.info("Overwriting password to: " + this.getCredentials().get(0).get("password"));
+        }
         if (Files.exists(getExtractedDistributionDir()) == false) {
             throw new TestClustersException("Can not start " + this + ", missing: " + getExtractedDistributionDir());
         }
@@ -784,6 +819,10 @@ public class OpenSearchNode implements TestClusterConfiguration {
         // Don't inherit anything from the environment for as that would lack reproducibility
         environment.clear();
         environment.putAll(getOpenSearchEnvironment());
+
+        if (extensionsEnabled) {
+            environment.put("OPENSEARCH_JAVA_OPTS", "-Dopensearch.experimental.feature.extensions.enabled=true");
+        }
 
         // don't buffer all in memory, make sure we don't block on the default pipes
         processBuilder.redirectError(ProcessBuilder.Redirect.appendTo(stderrFile.toFile()));
@@ -1149,10 +1188,6 @@ public class OpenSearchNode implements TestClusterConfiguration {
         // Don't wait for state, just start up quickly. This will also allow new and old nodes in the BWC case to become the master
         baseConfig.put("discovery.initial_state_timeout", "0s");
 
-        // TODO: Remove these once https://github.com/elastic/elasticsearch/issues/46091 is fixed
-        baseConfig.put("logger.org.opensearch.action.support.master", "DEBUG");
-        baseConfig.put("logger.org.opensearch.cluster.coordination", "DEBUG");
-
         HashSet<String> overriden = new HashSet<>(baseConfig.keySet());
         overriden.retainAll(settings.keySet());
         OVERRIDABLE_SETTINGS.forEach(overriden::remove);
@@ -1337,6 +1372,11 @@ public class OpenSearchNode implements TestClusterConfiguration {
     @Nested
     public List<?> getExtraConfigFiles() {
         return extraConfigFiles.getNormalizedCollection();
+    }
+
+    @Internal
+    public Map<String, File> getExtraConfigFilesMap() {
+        return extraConfigFiles;
     }
 
     @Override

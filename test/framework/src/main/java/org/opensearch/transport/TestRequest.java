@@ -31,8 +31,8 @@
 
 package org.opensearch.transport;
 
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
 
 import java.io.IOException;
 
@@ -53,5 +53,9 @@ public class TestRequest extends TransportRequest {
     public void writeTo(StreamOutput out) throws IOException {
         super.writeTo(out);
         out.writeString(value);
+    }
+
+    public String getValue() {
+        return value;
     }
 }

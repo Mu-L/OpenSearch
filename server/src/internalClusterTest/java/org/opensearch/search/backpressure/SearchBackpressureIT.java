@@ -8,54 +8,75 @@
 
 package org.opensearch.search.backpressure;
 
-import org.hamcrest.MatcherAssert;
-import org.junit.After;
-import org.junit.Before;
-import org.opensearch.action.ActionListener;
+import com.carrotsearch.randomizedtesting.annotations.ParametersFactory;
+
 import org.opensearch.action.ActionRequest;
 import org.opensearch.action.ActionRequestValidationException;
-import org.opensearch.action.ActionResponse;
 import org.opensearch.action.ActionType;
+import org.opensearch.action.admin.cluster.settings.ClusterUpdateSettingsResponse;
 import org.opensearch.action.search.SearchShardTask;
+import org.opensearch.action.search.SearchTask;
 import org.opensearch.action.support.ActionFilters;
 import org.opensearch.action.support.HandledTransportAction;
 import org.opensearch.common.inject.Inject;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.action.ActionResponse;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.tasks.TaskCancelledException;
+import org.opensearch.core.tasks.TaskId;
 import org.opensearch.plugins.ActionPlugin;
 import org.opensearch.plugins.Plugin;
 import org.opensearch.search.backpressure.settings.NodeDuressSettings;
 import org.opensearch.search.backpressure.settings.SearchBackpressureSettings;
 import org.opensearch.search.backpressure.settings.SearchShardTaskSettings;
-import org.opensearch.search.backpressure.trackers.CpuUsageTracker;
-import org.opensearch.search.backpressure.trackers.ElapsedTimeTracker;
-import org.opensearch.search.backpressure.trackers.HeapUsageTracker;
+import org.opensearch.search.backpressure.settings.SearchTaskSettings;
+import org.opensearch.tasks.CancellableTask;
 import org.opensearch.tasks.Task;
-import org.opensearch.tasks.TaskCancelledException;
-import org.opensearch.tasks.TaskId;
 import org.opensearch.test.OpenSearchIntegTestCase;
+import org.opensearch.test.ParameterizedStaticSettingsOpenSearchIntegTestCase;
 import org.opensearch.threadpool.ThreadPool;
 import org.opensearch.transport.TransportService;
+import org.opensearch.wlm.QueryGroupTask;
+import org.hamcrest.MatcherAssert;
+import org.junit.After;
+import org.junit.Before;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
+import static org.opensearch.search.SearchService.CLUSTER_CONCURRENT_SEGMENT_SEARCH_SETTING;
+import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertAcked;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.instanceOf;
-import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertAcked;
 
 @OpenSearchIntegTestCase.ClusterScope(scope = OpenSearchIntegTestCase.Scope.SUITE)
-public class SearchBackpressureIT extends OpenSearchIntegTestCase {
+public class SearchBackpressureIT extends ParameterizedStaticSettingsOpenSearchIntegTestCase {
 
     private static final TimeValue TIMEOUT = new TimeValue(10, TimeUnit.SECONDS);
+    private static final int MOVING_AVERAGE_WINDOW_SIZE = 10;
+
+    public SearchBackpressureIT(Settings staticSettings) {
+        super(staticSettings);
+    }
+
+    @ParametersFactory
+    public static Collection<Object[]> parameters() {
+        return Arrays.asList(
+            new Object[] { Settings.builder().put(CLUSTER_CONCURRENT_SEGMENT_SEARCH_SETTING.getKey(), false).build() },
+            new Object[] { Settings.builder().put(CLUSTER_CONCURRENT_SEGMENT_SEARCH_SETTING.getKey(), true).build() }
+        );
+    }
 
     @Override
     protected Collection<Class<? extends Plugin>> nodePlugins() {
@@ -70,6 +91,7 @@ public class SearchBackpressureIT extends OpenSearchIntegTestCase {
             .put(NodeDuressSettings.SETTING_CPU_THRESHOLD.getKey(), 0.0)
             .put(NodeDuressSettings.SETTING_HEAP_THRESHOLD.getKey(), 0.0)
             .put(NodeDuressSettings.SETTING_NUM_SUCCESSIVE_BREACHES.getKey(), 1)
+            .put(SearchTaskSettings.SETTING_TOTAL_HEAP_PERCENT_THRESHOLD.getKey(), 0.0)
             .put(SearchShardTaskSettings.SETTING_TOTAL_HEAP_PERCENT_THRESHOLD.getKey(), 0.0)
             .build();
         assertAcked(client().admin().cluster().prepareUpdateSettings().setPersistentSettings(request).get());
@@ -86,15 +108,56 @@ public class SearchBackpressureIT extends OpenSearchIntegTestCase {
         );
     }
 
-    public void testSearchShardTaskCancellationWithHighElapsedTime() throws InterruptedException {
+    public void testCancellationSettingsChanged() {
+        Settings request = Settings.builder().put(SearchTaskSettings.SETTING_CANCELLATION_RATE.getKey(), "0.05").build();
+        ClusterUpdateSettingsResponse response = client().admin().cluster().prepareUpdateSettings().setPersistentSettings(request).get();
+        assertEquals(response.getPersistentSettings().get(SearchTaskSettings.SETTING_CANCELLATION_RATE.getKey()), "0.05");
+
+        request = Settings.builder().put(SearchShardTaskSettings.SETTING_CANCELLATION_RATIO.getKey(), "0.7").build();
+        response = client().admin().cluster().prepareUpdateSettings().setPersistentSettings(request).get();
+        assertEquals(response.getPersistentSettings().get(SearchShardTaskSettings.SETTING_CANCELLATION_RATIO.getKey()), "0.7");
+    }
+
+    public void testSearchTaskCancellationWithHighElapsedTime() throws InterruptedException {
         Settings request = Settings.builder()
             .put(SearchBackpressureSettings.SETTING_MODE.getKey(), "enforced")
-            .put(ElapsedTimeTracker.SETTING_ELAPSED_TIME_MILLIS_THRESHOLD.getKey(), 1000)
+            .put(SearchTaskSettings.SETTING_ELAPSED_TIME_MILLIS_THRESHOLD.getKey(), 1000)
             .build();
         assertAcked(client().admin().cluster().prepareUpdateSettings().setPersistentSettings(request).get());
 
         ExceptionCatchingListener listener = new ExceptionCatchingListener();
-        client().execute(TestTransportAction.ACTION, new TestRequest(RequestType.HIGH_ELAPSED_TIME), listener);
+        client().execute(
+            TestTransportAction.ACTION,
+            new TestRequest<>(
+                RequestType.HIGH_ELAPSED_TIME,
+                (TaskFactory<Task>) (id, type, action, description, parentTaskId, headers) -> new SearchTask(
+                    id,
+                    type,
+                    action,
+                    descriptionSupplier(description),
+                    parentTaskId,
+                    headers
+                )
+            ),
+            listener
+        );
+        assertTrue(listener.latch.await(TIMEOUT.getSeconds(), TimeUnit.SECONDS));
+
+        Exception caughtException = listener.getException();
+        assertNotNull("SearchTask should have been cancelled with TaskCancelledException", caughtException);
+        MatcherAssert.assertThat(caughtException, instanceOf(TaskCancelledException.class));
+        MatcherAssert.assertThat(caughtException.getMessage(), containsString("elapsed time exceeded"));
+    }
+
+    public void testSearchShardTaskCancellationWithHighElapsedTime() throws InterruptedException {
+        Settings request = Settings.builder()
+            .put(SearchBackpressureSettings.SETTING_MODE.getKey(), "enforced")
+            .put(SearchShardTaskSettings.SETTING_ELAPSED_TIME_MILLIS_THRESHOLD.getKey(), 1000)
+            .build();
+        assertAcked(client().admin().cluster().prepareUpdateSettings().setPersistentSettings(request).get());
+
+        ExceptionCatchingListener listener = new ExceptionCatchingListener();
+        client().execute(TestTransportAction.ACTION, new TestRequest<>(RequestType.HIGH_ELAPSED_TIME, SearchShardTask::new), listener);
         assertTrue(listener.latch.await(TIMEOUT.getSeconds(), TimeUnit.SECONDS));
 
         Exception caughtException = listener.getException();
@@ -103,15 +166,46 @@ public class SearchBackpressureIT extends OpenSearchIntegTestCase {
         MatcherAssert.assertThat(caughtException.getMessage(), containsString("elapsed time exceeded"));
     }
 
-    public void testSearchShardTaskCancellationWithHighCpu() throws InterruptedException {
+    public void testSearchTaskCancellationWithHighCpu() throws InterruptedException {
         Settings request = Settings.builder()
             .put(SearchBackpressureSettings.SETTING_MODE.getKey(), "enforced")
-            .put(CpuUsageTracker.SETTING_CPU_TIME_MILLIS_THRESHOLD.getKey(), 1000)
+            .put(SearchTaskSettings.SETTING_CPU_TIME_MILLIS_THRESHOLD.getKey(), 1000)
             .build();
         assertAcked(client().admin().cluster().prepareUpdateSettings().setPersistentSettings(request).get());
 
         ExceptionCatchingListener listener = new ExceptionCatchingListener();
-        client().execute(TestTransportAction.ACTION, new TestRequest(RequestType.HIGH_CPU), listener);
+        client().execute(
+            TestTransportAction.ACTION,
+            new TestRequest<>(
+                RequestType.HIGH_CPU,
+                (TaskFactory<Task>) (id, type, action, description, parentTaskId, headers) -> new SearchTask(
+                    id,
+                    type,
+                    action,
+                    descriptionSupplier(description),
+                    parentTaskId,
+                    headers
+                )
+            ),
+            listener
+        );
+        assertTrue(listener.latch.await(TIMEOUT.getSeconds(), TimeUnit.SECONDS));
+
+        Exception caughtException = listener.getException();
+        assertNotNull("SearchTask should have been cancelled with TaskCancelledException", caughtException);
+        MatcherAssert.assertThat(caughtException, instanceOf(TaskCancelledException.class));
+        MatcherAssert.assertThat(caughtException.getMessage(), containsString("cpu usage exceeded"));
+    }
+
+    public void testSearchShardTaskCancellationWithHighCpu() throws InterruptedException {
+        Settings request = Settings.builder()
+            .put(SearchBackpressureSettings.SETTING_MODE.getKey(), "enforced")
+            .put(SearchShardTaskSettings.SETTING_CPU_TIME_MILLIS_THRESHOLD.getKey(), 1000)
+            .build();
+        assertAcked(client().admin().cluster().prepareUpdateSettings().setPersistentSettings(request).get());
+
+        ExceptionCatchingListener listener = new ExceptionCatchingListener();
+        client().execute(TestTransportAction.ACTION, new TestRequest<>(RequestType.HIGH_CPU, SearchShardTask::new), listener);
         assertTrue(listener.latch.await(TIMEOUT.getSeconds(), TimeUnit.SECONDS));
 
         Exception caughtException = listener.getException();
@@ -120,27 +214,82 @@ public class SearchBackpressureIT extends OpenSearchIntegTestCase {
         MatcherAssert.assertThat(caughtException.getMessage(), containsString("cpu usage exceeded"));
     }
 
-    public void testSearchShardTaskCancellationWithHighHeapUsage() throws InterruptedException {
+    public void testSearchTaskCancellationWithHighHeapUsage() throws InterruptedException {
         // Before SearchBackpressureService cancels a task based on its heap usage, we need to build up the heap moving average
         // To build up the heap moving average, we need to hit the same node with multiple requests and then hit the same node with a
         // request having higher heap usage
         String node = randomFrom(internalCluster().getNodeNames());
-        final int MOVING_AVERAGE_WINDOW_SIZE = 10;
         Settings request = Settings.builder()
             .put(SearchBackpressureSettings.SETTING_MODE.getKey(), "enforced")
-            .put(HeapUsageTracker.SETTING_HEAP_PERCENT_THRESHOLD.getKey(), 0.0)
-            .put(HeapUsageTracker.SETTING_HEAP_VARIANCE_THRESHOLD.getKey(), 1.0)
-            .put(HeapUsageTracker.SETTING_HEAP_MOVING_AVERAGE_WINDOW_SIZE.getKey(), MOVING_AVERAGE_WINDOW_SIZE)
+            .put(SearchTaskSettings.SETTING_HEAP_PERCENT_THRESHOLD.getKey(), 0.0)
+            .put(SearchTaskSettings.SETTING_HEAP_VARIANCE_THRESHOLD.getKey(), 1.0)
+            .put(SearchTaskSettings.SETTING_HEAP_MOVING_AVERAGE_WINDOW_SIZE.getKey(), MOVING_AVERAGE_WINDOW_SIZE)
             .build();
         assertAcked(client().admin().cluster().prepareUpdateSettings().setPersistentSettings(request).get());
 
         ExceptionCatchingListener listener = new ExceptionCatchingListener();
         for (int i = 0; i < MOVING_AVERAGE_WINDOW_SIZE; i++) {
-            client(node).execute(TestTransportAction.ACTION, new TestRequest(RequestType.HIGH_HEAP), listener);
+            client(node).execute(
+                TestTransportAction.ACTION,
+                new TestRequest<>(
+                    RequestType.HIGH_HEAP,
+                    (TaskFactory<Task>) (id, type, action, description, parentTaskId, headers) -> new SearchTask(
+                        id,
+                        type,
+                        action,
+                        descriptionSupplier(description),
+                        parentTaskId,
+                        headers
+                    )
+                ),
+                listener
+            );
         }
 
         listener = new ExceptionCatchingListener();
-        client(node).execute(TestTransportAction.ACTION, new TestRequest(RequestType.HIGHER_HEAP), listener);
+        client(node).execute(
+            TestTransportAction.ACTION,
+            new TestRequest<>(
+                RequestType.HIGHER_HEAP,
+                (TaskFactory<Task>) (id, type, action, description, parentTaskId, headers) -> new SearchTask(
+                    id,
+                    type,
+                    action,
+                    descriptionSupplier(description),
+                    parentTaskId,
+                    headers
+                )
+            ),
+            listener
+        );
+        assertTrue(listener.latch.await(TIMEOUT.getSeconds(), TimeUnit.SECONDS));
+
+        Exception caughtException = listener.getException();
+        assertNotNull("SearchTask should have been cancelled with TaskCancelledException", caughtException);
+        MatcherAssert.assertThat(caughtException, instanceOf(TaskCancelledException.class));
+        MatcherAssert.assertThat(caughtException.getMessage(), containsString("heap usage exceeded"));
+    }
+
+    public void testSearchShardTaskCancellationWithHighHeapUsage() throws InterruptedException {
+        // Before SearchBackpressureService cancels a task based on its heap usage, we need to build up the heap moving average
+        // To build up the heap moving average, we need to hit the same node with multiple requests and then hit the same node with a
+        // request having higher heap usage
+        String node = randomFrom(internalCluster().getNodeNames());
+        Settings request = Settings.builder()
+            .put(SearchBackpressureSettings.SETTING_MODE.getKey(), "enforced")
+            .put(SearchShardTaskSettings.SETTING_HEAP_PERCENT_THRESHOLD.getKey(), 0.0)
+            .put(SearchShardTaskSettings.SETTING_HEAP_VARIANCE_THRESHOLD.getKey(), 1.0)
+            .put(SearchShardTaskSettings.SETTING_HEAP_MOVING_AVERAGE_WINDOW_SIZE.getKey(), MOVING_AVERAGE_WINDOW_SIZE)
+            .build();
+        assertAcked(client().admin().cluster().prepareUpdateSettings().setPersistentSettings(request).get());
+
+        ExceptionCatchingListener listener = new ExceptionCatchingListener();
+        for (int i = 0; i < MOVING_AVERAGE_WINDOW_SIZE; i++) {
+            client(node).execute(TestTransportAction.ACTION, new TestRequest<>(RequestType.HIGH_HEAP, SearchShardTask::new), listener);
+        }
+
+        listener = new ExceptionCatchingListener();
+        client(node).execute(TestTransportAction.ACTION, new TestRequest<>(RequestType.HIGHER_HEAP, SearchShardTask::new), listener);
         assertTrue(listener.latch.await(TIMEOUT.getSeconds(), TimeUnit.SECONDS));
 
         Exception caughtException = listener.getException();
@@ -154,7 +303,7 @@ public class SearchBackpressureIT extends OpenSearchIntegTestCase {
         assertAcked(client().admin().cluster().prepareUpdateSettings().setPersistentSettings(request).get());
 
         ExceptionCatchingListener listener = new ExceptionCatchingListener();
-        client().execute(TestTransportAction.ACTION, new TestRequest(RequestType.HIGH_ELAPSED_TIME), listener);
+        client().execute(TestTransportAction.ACTION, new TestRequest<>(RequestType.HIGH_ELAPSED_TIME, SearchShardTask::new), listener);
         // waiting for the TIMEOUT * 3 time for the request to complete and the latch to countdown.
         assertTrue(
             "SearchShardTask should have been completed by now and countdown the latch",
@@ -165,7 +314,7 @@ public class SearchBackpressureIT extends OpenSearchIntegTestCase {
         assertNull("SearchShardTask shouldn't have cancelled for monitor_only mode", caughtException);
     }
 
-    private static class ExceptionCatchingListener implements ActionListener<TestResponse> {
+    public static class ExceptionCatchingListener implements ActionListener<TestResponse> {
         private final CountDownLatch latch;
         private Exception exception = null;
 
@@ -184,7 +333,11 @@ public class SearchBackpressureIT extends OpenSearchIntegTestCase {
             latch.countDown();
         }
 
-        private Exception getException() {
+        public CountDownLatch getLatch() {
+            return latch;
+        }
+
+        public Exception getException() {
             return exception;
         }
     }
@@ -196,11 +349,21 @@ public class SearchBackpressureIT extends OpenSearchIntegTestCase {
         HIGH_ELAPSED_TIME;
     }
 
-    public static class TestRequest extends ActionRequest {
-        private final RequestType type;
+    private Supplier<String> descriptionSupplier(String description) {
+        return () -> description;
+    }
 
-        public TestRequest(RequestType type) {
+    public interface TaskFactory<T extends Task> {
+        T createTask(long id, String type, String action, String description, TaskId parentTaskId, Map<String, String> headers);
+    }
+
+    public static class TestRequest<T extends Task> extends ActionRequest {
+        private final RequestType type;
+        private TaskFactory<T> taskFactory;
+
+        public TestRequest(RequestType type, TaskFactory<T> taskFactory) {
             this.type = type;
+            this.taskFactory = taskFactory;
         }
 
         public TestRequest(StreamInput in) throws IOException {
@@ -215,7 +378,7 @@ public class SearchBackpressureIT extends OpenSearchIntegTestCase {
 
         @Override
         public Task createTask(long id, String type, String action, TaskId parentTaskId, Map<String, String> headers) {
-            return new SearchShardTask(id, type, action, "", parentTaskId, headers);
+            return taskFactory.createTask(id, type, action, "", parentTaskId, headers);
         }
 
         @Override
@@ -252,7 +415,8 @@ public class SearchBackpressureIT extends OpenSearchIntegTestCase {
         protected void doExecute(Task task, TestRequest request, ActionListener<TestResponse> listener) {
             threadPool.executor(ThreadPool.Names.SEARCH).execute(() -> {
                 try {
-                    SearchShardTask searchShardTask = (SearchShardTask) task;
+                    CancellableTask cancellableTask = (CancellableTask) task;
+                    ((QueryGroupTask) task).setQueryGroupId(threadPool.getThreadContext());
                     long startTime = System.nanoTime();
 
                     // Doing a busy-wait until task cancellation or timeout.
@@ -260,11 +424,11 @@ public class SearchBackpressureIT extends OpenSearchIntegTestCase {
                     do {
                         doWork(request);
                     } while (request.type != RequestType.HIGH_HEAP
-                        && searchShardTask.isCancelled() == false
+                        && cancellableTask.isCancelled() == false
                         && (System.nanoTime() - startTime) < TIMEOUT.getNanos());
 
-                    if (searchShardTask.isCancelled()) {
-                        throw new TaskCancelledException(searchShardTask.getReasonCancelled());
+                    if (cancellableTask.isCancelled()) {
+                        throw new TaskCancelledException(cancellableTask.getReasonCancelled());
                     } else {
                         listener.onResponse(new TestResponse());
                     }
@@ -274,7 +438,7 @@ public class SearchBackpressureIT extends OpenSearchIntegTestCase {
             });
         }
 
-        private void doWork(TestRequest request) throws InterruptedException {
+        private void doWork(TestRequest<Task> request) throws InterruptedException {
             switch (request.getType()) {
                 case HIGH_CPU:
                     long i = 0, j = 1, k = 1, iterations = 1000;

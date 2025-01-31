@@ -32,26 +32,27 @@
 
 package org.opensearch.action.admin.indices.mapping.put;
 
-import com.carrotsearch.hppc.ObjectHashSet;
 import org.opensearch.OpenSearchGenerationException;
 import org.opensearch.Version;
 import org.opensearch.action.ActionRequestValidationException;
 import org.opensearch.action.IndicesRequest;
 import org.opensearch.action.support.IndicesOptions;
-import org.opensearch.action.support.master.AcknowledgedRequest;
-import org.opensearch.action.support.master.AcknowledgedResponse;
-import org.opensearch.common.Strings;
-import org.opensearch.common.bytes.BytesArray;
-import org.opensearch.common.bytes.BytesReference;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.util.CollectionUtils;
-import org.opensearch.common.xcontent.ToXContentObject;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.action.support.clustermanager.AcknowledgedRequest;
+import org.opensearch.action.support.clustermanager.AcknowledgedResponse;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.xcontent.XContentFactory;
 import org.opensearch.common.xcontent.XContentHelper;
-import org.opensearch.common.xcontent.XContentType;
-import org.opensearch.index.Index;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.bytes.BytesArray;
+import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.util.CollectionUtils;
+import org.opensearch.core.index.Index;
+import org.opensearch.core.xcontent.MediaType;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.ToXContentObject;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.index.mapper.MapperService;
 
 import java.io.IOException;
@@ -60,6 +61,7 @@ import java.io.UncheckedIOException;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 import static org.opensearch.action.ValidateActions.addValidationError;
 
@@ -74,11 +76,12 @@ import static org.opensearch.action.ValidateActions.addValidationError;
  * @see org.opensearch.client.IndicesAdminClient#putMapping(PutMappingRequest)
  * @see AcknowledgedResponse
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class PutMappingRequest extends AcknowledgedRequest<PutMappingRequest> implements IndicesRequest.Replaceable, ToXContentObject {
 
-    private static ObjectHashSet<String> RESERVED_FIELDS = ObjectHashSet.from(
+    private static final Set<String> RESERVED_FIELDS = Set.of(
         "_uid",
         "_id",
         "_type",
@@ -209,7 +212,7 @@ public class PutMappingRequest extends AcknowledgedRequest<PutMappingRequest> im
     /**
      * A specialized simplified mapping source method, takes the form of simple properties definition:
      * ("field1", "type=string,store=true").
-     *
+     * <p>
      * Also supports metadata mapping fields such as `_all` and `_parent` as property definition, these metadata
      * mapping fields will automatically be put on the top level mapping object.
      */
@@ -297,7 +300,7 @@ public class PutMappingRequest extends AcknowledgedRequest<PutMappingRequest> im
      */
     public PutMappingRequest source(Map<String, ?> mappingSource) {
         try {
-            XContentBuilder builder = XContentFactory.contentBuilder(XContentType.JSON);
+            XContentBuilder builder = MediaTypeRegistry.contentBuilder(MediaTypeRegistry.JSON);
             builder.map(mappingSource);
             return source(BytesReference.bytes(builder), builder.contentType());
         } catch (IOException e) {
@@ -308,17 +311,17 @@ public class PutMappingRequest extends AcknowledgedRequest<PutMappingRequest> im
     /**
      * The mapping source definition.
      */
-    public PutMappingRequest source(String mappingSource, XContentType xContentType) {
-        return source(new BytesArray(mappingSource), xContentType);
+    public PutMappingRequest source(String mappingSource, MediaType mediaType) {
+        return source(new BytesArray(mappingSource), mediaType);
     }
 
     /**
      * The mapping source definition.
      */
-    public PutMappingRequest source(BytesReference mappingSource, XContentType xContentType) {
-        Objects.requireNonNull(xContentType);
+    public PutMappingRequest source(BytesReference mappingSource, MediaType mediaType) {
+        Objects.requireNonNull(mediaType);
         try {
-            this.source = XContentHelper.convertToJson(mappingSource, false, false, xContentType);
+            this.source = XContentHelper.convertToJson(mappingSource, false, false, mediaType);
             return this;
         } catch (IOException e) {
             throw new UncheckedIOException("failed to convert source to json", e);
@@ -352,7 +355,7 @@ public class PutMappingRequest extends AcknowledgedRequest<PutMappingRequest> im
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
         if (source != null) {
             try (InputStream stream = new BytesArray(source).streamInput()) {
-                builder.rawValue(stream, XContentType.JSON);
+                builder.rawValue(stream, MediaTypeRegistry.JSON);
             }
         } else {
             builder.startObject().endObject();

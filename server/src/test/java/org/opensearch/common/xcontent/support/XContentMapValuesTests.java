@@ -32,15 +32,16 @@
 
 package org.opensearch.common.xcontent.support;
 
-import org.opensearch.common.Strings;
-import org.opensearch.common.bytes.BytesReference;
 import org.opensearch.common.collect.Tuple;
-import org.opensearch.common.xcontent.ToXContentObject;
-import org.opensearch.common.xcontent.XContentBuilder;
 import org.opensearch.common.xcontent.XContentFactory;
-import org.opensearch.common.xcontent.XContentParser;
 import org.opensearch.common.xcontent.XContentType;
 import org.opensearch.common.xcontent.json.JsonXContent;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.xcontent.MediaType;
+import org.opensearch.core.xcontent.ToXContentObject;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -54,7 +55,7 @@ import java.util.Set;
 import static java.util.Collections.emptySet;
 import static java.util.Collections.singleton;
 import static org.opensearch.common.xcontent.XContentHelper.convertToMap;
-import static org.opensearch.common.xcontent.XContentHelper.toXContent;
+import static org.opensearch.core.xcontent.XContentHelper.toXContent;
 import static org.hamcrest.Matchers.hasEntry;
 import static org.hamcrest.Matchers.hasKey;
 import static org.hamcrest.Matchers.hasSize;
@@ -94,7 +95,7 @@ public class XContentMapValuesTests extends AbstractFilteringTestCase {
         XContentBuilder builder = XContentFactory.jsonBuilder().startObject().field("test", "value").endObject();
 
         Map<String, Object> map;
-        try (XContentParser parser = createParser(JsonXContent.jsonXContent, Strings.toString(builder))) {
+        try (XContentParser parser = createParser(JsonXContent.jsonXContent, builder.toString())) {
             map = parser.map();
         }
         assertThat(XContentMapValues.extractValue("test", map).toString(), equalTo("value"));
@@ -110,7 +111,7 @@ public class XContentMapValuesTests extends AbstractFilteringTestCase {
             .endObject()
             .endObject();
 
-        try (XContentParser parser = createParser(JsonXContent.jsonXContent, Strings.toString(builder))) {
+        try (XContentParser parser = createParser(JsonXContent.jsonXContent, builder.toString())) {
             map = parser.map();
         }
         assertThat(XContentMapValues.extractValue("path1.path2.test", map).toString(), equalTo("value"));
@@ -135,7 +136,7 @@ public class XContentMapValuesTests extends AbstractFilteringTestCase {
             .endObject()
             .endObject();
 
-        try (XContentParser parser = createParser(JsonXContent.jsonXContent, Strings.toString(builder))) {
+        try (XContentParser parser = createParser(JsonXContent.jsonXContent, builder.toString())) {
             map = parser.map();
         }
 
@@ -159,7 +160,7 @@ public class XContentMapValuesTests extends AbstractFilteringTestCase {
             .endObject()
             .endObject();
 
-        try (XContentParser parser = createParser(JsonXContent.jsonXContent, Strings.toString(builder))) {
+        try (XContentParser parser = createParser(JsonXContent.jsonXContent, builder.toString())) {
             map = parser.map();
         }
 
@@ -173,7 +174,7 @@ public class XContentMapValuesTests extends AbstractFilteringTestCase {
 
         // fields with . in them
         builder = XContentFactory.jsonBuilder().startObject().field("xxx.yyy", "value").endObject();
-        try (XContentParser parser = createParser(JsonXContent.jsonXContent, Strings.toString(builder))) {
+        try (XContentParser parser = createParser(JsonXContent.jsonXContent, builder.toString())) {
             map = parser.map();
         }
         assertThat(XContentMapValues.extractValue("xxx.yyy", map).toString(), equalTo("value"));
@@ -187,7 +188,7 @@ public class XContentMapValuesTests extends AbstractFilteringTestCase {
             .endObject()
             .endObject();
 
-        try (XContentParser parser = createParser(JsonXContent.jsonXContent, Strings.toString(builder))) {
+        try (XContentParser parser = createParser(JsonXContent.jsonXContent, builder.toString())) {
             map = parser.map();
         }
         assertThat(XContentMapValues.extractValue("path1.xxx.path2.yyy.test", map).toString(), equalTo("value"));
@@ -215,7 +216,7 @@ public class XContentMapValuesTests extends AbstractFilteringTestCase {
             .endObject();
 
         Map<String, Object> map;
-        try (XContentParser parser = createParser(JsonXContent.jsonXContent, Strings.toString(builder))) {
+        try (XContentParser parser = createParser(JsonXContent.jsonXContent, builder.toString())) {
             map = parser.map();
         }
         assertEquals("value", XContentMapValues.extractValue("field", map, "NULL"));
@@ -224,14 +225,8 @@ public class XContentMapValuesTests extends AbstractFilteringTestCase {
         assertNull(XContentMapValues.extractValue("object1.missing", map, "NULL"));
 
         assertEquals("NULL", XContentMapValues.extractValue("other_field", map, "NULL"));
-        assertEquals(
-            org.opensearch.common.collect.List.of("value1", "NULL", "value2"),
-            XContentMapValues.extractValue("array", map, "NULL")
-        );
-        assertEquals(
-            org.opensearch.common.collect.List.of("NULL", "value"),
-            XContentMapValues.extractValue("object_array.field", map, "NULL")
-        );
+        assertEquals(List.of("value1", "NULL", "value2"), XContentMapValues.extractValue("array", map, "NULL"));
+        assertEquals(List.of("NULL", "value"), XContentMapValues.extractValue("object_array.field", map, "NULL"));
         assertEquals("NULL", XContentMapValues.extractValue("object1.object2.field", map, "NULL"));
     }
 
@@ -239,14 +234,14 @@ public class XContentMapValuesTests extends AbstractFilteringTestCase {
         XContentBuilder builder = XContentFactory.jsonBuilder().startObject().field("test", "value").endObject();
 
         Map<String, Object> map;
-        try (XContentParser parser = createParser(JsonXContent.jsonXContent, Strings.toString(builder))) {
+        try (XContentParser parser = createParser(JsonXContent.jsonXContent, builder.toString())) {
             map = parser.map();
         }
         assertThat(XContentMapValues.extractRawValues("test", map).get(0).toString(), equalTo("value"));
 
         builder = XContentFactory.jsonBuilder().startObject().field("test.me", "value").endObject();
 
-        try (XContentParser parser = createParser(JsonXContent.jsonXContent, Strings.toString(builder))) {
+        try (XContentParser parser = createParser(JsonXContent.jsonXContent, builder.toString())) {
             map = parser.map();
         }
         assertThat(XContentMapValues.extractRawValues("test.me", map).get(0).toString(), equalTo("value"));
@@ -260,7 +255,7 @@ public class XContentMapValuesTests extends AbstractFilteringTestCase {
             .endObject()
             .endObject();
 
-        try (XContentParser parser = createParser(JsonXContent.jsonXContent, Strings.toString(builder))) {
+        try (XContentParser parser = createParser(JsonXContent.jsonXContent, builder.toString())) {
             map = parser.map();
         }
         assertThat(XContentMapValues.extractRawValues("path1.path2.test", map).get(0).toString(), equalTo("value"));
@@ -274,7 +269,7 @@ public class XContentMapValuesTests extends AbstractFilteringTestCase {
             .endObject()
             .endObject();
 
-        try (XContentParser parser = createParser(JsonXContent.jsonXContent, Strings.toString(builder))) {
+        try (XContentParser parser = createParser(JsonXContent.jsonXContent, builder.toString())) {
             map = parser.map();
         }
         assertThat(XContentMapValues.extractRawValues("path1.xxx.path2.yyy.test", map).get(0).toString(), equalTo("value"));
@@ -428,7 +423,7 @@ public class XContentMapValuesTests extends AbstractFilteringTestCase {
     public void testThatFilterIncludesEmptyObjectWhenUsingIncludes() throws Exception {
         XContentBuilder builder = XContentFactory.jsonBuilder().startObject().startObject("obj").endObject().endObject();
 
-        Tuple<XContentType, Map<String, Object>> mapTuple = convertToMap(BytesReference.bytes(builder), true, builder.contentType());
+        Tuple<? extends MediaType, Map<String, Object>> mapTuple = convertToMap(BytesReference.bytes(builder), true, builder.contentType());
         Map<String, Object> filteredSource = XContentMapValues.filter(mapTuple.v2(), new String[] { "obj" }, Strings.EMPTY_ARRAY);
 
         assertThat(mapTuple.v2(), equalTo(filteredSource));
@@ -437,7 +432,7 @@ public class XContentMapValuesTests extends AbstractFilteringTestCase {
     public void testThatFilterIncludesEmptyObjectWhenUsingExcludes() throws Exception {
         XContentBuilder builder = XContentFactory.jsonBuilder().startObject().startObject("obj").endObject().endObject();
 
-        Tuple<XContentType, Map<String, Object>> mapTuple = convertToMap(BytesReference.bytes(builder), true, builder.contentType());
+        Tuple<? extends MediaType, Map<String, Object>> mapTuple = convertToMap(BytesReference.bytes(builder), true, builder.contentType());
         Map<String, Object> filteredSource = XContentMapValues.filter(
             mapTuple.v2(),
             Strings.EMPTY_ARRAY,
@@ -451,7 +446,7 @@ public class XContentMapValuesTests extends AbstractFilteringTestCase {
     public void testNotOmittingObjectsWithExcludedProperties() throws Exception {
         XContentBuilder builder = XContentFactory.jsonBuilder().startObject().startObject("obj").field("f1", "v1").endObject().endObject();
 
-        Tuple<XContentType, Map<String, Object>> mapTuple = convertToMap(BytesReference.bytes(builder), true, builder.contentType());
+        Tuple<? extends MediaType, Map<String, Object>> mapTuple = convertToMap(BytesReference.bytes(builder), true, builder.contentType());
         Map<String, Object> filteredSource = XContentMapValues.filter(mapTuple.v2(), Strings.EMPTY_ARRAY, new String[] { "obj.f1" });
 
         assertThat(filteredSource.size(), equalTo(1));
@@ -472,7 +467,7 @@ public class XContentMapValuesTests extends AbstractFilteringTestCase {
             .endObject();
 
         // implicit include
-        Tuple<XContentType, Map<String, Object>> mapTuple = convertToMap(BytesReference.bytes(builder), true, builder.contentType());
+        Tuple<? extends MediaType, Map<String, Object>> mapTuple = convertToMap(BytesReference.bytes(builder), true, builder.contentType());
         Map<String, Object> filteredSource = XContentMapValues.filter(mapTuple.v2(), Strings.EMPTY_ARRAY, new String[] { "*.obj2" });
 
         assertThat(filteredSource.size(), equalTo(1));
@@ -503,7 +498,7 @@ public class XContentMapValuesTests extends AbstractFilteringTestCase {
             .endObject()
             .endObject();
 
-        Tuple<XContentType, Map<String, Object>> mapTuple = convertToMap(BytesReference.bytes(builder), true, builder.contentType());
+        Tuple<? extends MediaType, Map<String, Object>> mapTuple = convertToMap(BytesReference.bytes(builder), true, builder.contentType());
         Map<String, Object> filteredSource = XContentMapValues.filter(mapTuple.v2(), new String[] { "*.obj2" }, Strings.EMPTY_ARRAY);
 
         assertThat(filteredSource.size(), equalTo(1));

@@ -8,20 +8,25 @@
 
 package org.opensearch.indices.replication.common;
 
+import org.apache.lucene.codecs.Codec;
 import org.apache.lucene.index.IndexCommit;
 import org.apache.lucene.index.IndexFileNames;
 import org.apache.lucene.index.SegmentInfos;
 import org.apache.lucene.util.Version;
-import org.opensearch.common.collect.Map;
+import org.opensearch.common.collect.Tuple;
 import org.opensearch.common.concurrent.GatedCloseable;
+import org.opensearch.common.settings.Settings;
+import org.opensearch.core.index.shard.ShardId;
+import org.opensearch.env.Environment;
 import org.opensearch.index.shard.IndexShard;
 import org.opensearch.index.shard.IndexShardTestCase;
-import org.opensearch.index.shard.ShardId;
 import org.opensearch.index.store.Store;
 import org.opensearch.index.store.StoreFileMetadata;
 import org.opensearch.indices.replication.checkpoint.ReplicationCheckpoint;
+import org.opensearch.test.IndexSettingsModule;
 
 import java.io.IOException;
+import java.util.Map;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -48,14 +53,7 @@ public class CopyStateTests extends IndexShardTestCase {
 
     public void testCopyStateCreation() throws IOException {
         final IndexShard mockIndexShard = createMockIndexShard();
-        ReplicationCheckpoint testCheckpoint = new ReplicationCheckpoint(
-            mockIndexShard.shardId(),
-            mockIndexShard.getOperationPrimaryTerm(),
-            0L,
-            mockIndexShard.getProcessedLocalCheckpoint(),
-            0L
-        );
-        CopyState copyState = new CopyState(testCheckpoint, mockIndexShard);
+        CopyState copyState = new CopyState(mockIndexShard);
         ReplicationCheckpoint checkpoint = copyState.getCheckpoint();
         assertEquals(TEST_SHARD_ID, checkpoint.getShardId());
         // version was never set so this should be zero
@@ -72,8 +70,24 @@ public class CopyStateTests extends IndexShardTestCase {
         Store mockStore = mock(Store.class);
         when(mockShard.store()).thenReturn(mockStore);
 
+        Settings nodeSettings = Settings.builder().put(Environment.PATH_HOME_SETTING.getKey(), createTempDir()).build();
+        when(mockShard.indexSettings()).thenReturn(IndexSettingsModule.newIndexSettings("_na", nodeSettings));
+
         SegmentInfos testSegmentInfos = new SegmentInfos(Version.LATEST.major);
-        when(mockShard.getSegmentInfosSnapshot()).thenReturn(new GatedCloseable<>(testSegmentInfos, () -> {}));
+        ReplicationCheckpoint testCheckpoint = new ReplicationCheckpoint(
+            mockShard.shardId(),
+            mockShard.getOperationPrimaryTerm(),
+            0L,
+            0L,
+            0L,
+            Codec.getDefault().getName(),
+            SI_SNAPSHOT.asMap()
+        );
+        final Tuple<GatedCloseable<SegmentInfos>, ReplicationCheckpoint> gatedCloseableReplicationCheckpointTuple = new Tuple<>(
+            new GatedCloseable<>(testSegmentInfos, () -> {}),
+            testCheckpoint
+        );
+        when(mockShard.getLatestSegmentInfosAndCheckpoint()).thenReturn(gatedCloseableReplicationCheckpointTuple);
         when(mockStore.getSegmentMetadataMap(testSegmentInfos)).thenReturn(SI_SNAPSHOT.asMap());
 
         IndexCommit mockIndexCommit = mock(IndexCommit.class);

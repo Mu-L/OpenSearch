@@ -9,7 +9,8 @@
 package org.opensearch.cluster.decommission;
 
 import org.opensearch.OpenSearchException;
-import org.opensearch.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.rest.RestStatus;
 
 import java.io.IOException;
 
@@ -27,5 +28,10 @@ public class NodeDecommissionedException extends OpenSearchException {
 
     public NodeDecommissionedException(StreamInput in) throws IOException {
         super(in);
+    }
+
+    @Override
+    public RestStatus status() {
+        return RestStatus.FAILED_DEPENDENCY;
     }
 }

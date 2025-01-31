@@ -37,11 +37,11 @@ import org.apache.lucene.geo.GeoEncodingUtils;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexableField;
-import org.apache.lucene.tests.index.RandomIndexWriter;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.tests.index.RandomIndexWriter;
 import org.apache.lucene.util.BytesRef;
 import org.opensearch.common.CheckedConsumer;
 import org.opensearch.common.geo.GeoBoundingBox;
@@ -123,7 +123,9 @@ public abstract class GeoGridAggregatorTestCase<T extends BaseGeoGridBucket> ext
             randomPrecision(),
             null,
             geoGrid -> { assertEquals(0, geoGrid.getBuckets().size()); },
-            iw -> { iw.addDocument(Collections.singleton(new LatLonDocValuesField(FIELD_NAME, 10D, 10D))); }
+            iw -> {
+                iw.addDocument(Collections.singleton(new LatLonDocValuesField(FIELD_NAME, 10D, 10D)));
+            }
         );
     }
 

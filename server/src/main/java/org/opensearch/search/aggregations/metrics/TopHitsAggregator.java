@@ -32,8 +32,6 @@
 
 package org.opensearch.search.aggregations.metrics;
 
-import com.carrotsearch.hppc.LongObjectHashMap;
-import com.carrotsearch.hppc.cursors.ObjectCursor;
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.search.Collector;
 import org.apache.lucene.search.FieldDoc;
@@ -45,8 +43,9 @@ import org.apache.lucene.search.ScoreMode;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.search.TopDocsCollector;
 import org.apache.lucene.search.TopFieldCollector;
+import org.apache.lucene.search.TopFieldCollectorManager;
 import org.apache.lucene.search.TopFieldDocs;
-import org.apache.lucene.search.TopScoreDocCollector;
+import org.apache.lucene.search.TopScoreDocCollectorManager;
 import org.apache.lucene.search.TotalHits;
 import org.opensearch.OpenSearchException;
 import org.opensearch.action.search.MaxScoreCollector;
@@ -68,6 +67,7 @@ import org.opensearch.search.rescore.RescoreContext;
 import org.opensearch.search.sort.SortAndFormats;
 
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -129,7 +129,7 @@ class TopHitsAggregator extends MetricsAggregator {
         // when post collecting then we have already replaced the leaf readers on the aggregator level have already been
         // replaced with the next leaf readers and then post collection pushes docids of the previous segment, which
         // then causes assertions to trip or incorrect top docs to be computed.
-        final LongObjectHashMap<LeafCollector> leafCollectors = new LongObjectHashMap<>(1);
+        final Map<Long, LeafCollector> leafCollectors = new HashMap<>(1);
         return new LeafBucketCollectorBase(sub, null) {
 
             Scorable scorer;
@@ -138,8 +138,8 @@ class TopHitsAggregator extends MetricsAggregator {
             public void setScorer(Scorable scorer) throws IOException {
                 this.scorer = scorer;
                 super.setScorer(scorer);
-                for (ObjectCursor<LeafCollector> cursor : leafCollectors.values()) {
-                    cursor.value.setScorer(scorer);
+                for (var collector : leafCollectors.values()) {
+                    collector.setScorer(scorer);
                 }
             }
 
@@ -158,28 +158,28 @@ class TopHitsAggregator extends MetricsAggregator {
                     // but here we create collectors ourselves and we need prevent OOM because of crazy an offset and size.
                     topN = Math.min(topN, subSearchContext.searcher().getIndexReader().maxDoc());
                     if (sort == null) {
-                        collectors = new Collectors(TopScoreDocCollector.create(topN, Integer.MAX_VALUE), null);
+                        collectors = new Collectors(
+                            new TopScoreDocCollectorManager(topN, null, Integer.MAX_VALUE, false).newCollector(),
+                            null
+                        );
                     } else {
                         // TODO: can we pass trackTotalHits=subSearchContext.trackTotalHits(){
                         // Note that this would require to catch CollectionTerminatedException
                         collectors = new Collectors(
-                            TopFieldCollector.create(sort.sort, topN, Integer.MAX_VALUE),
+                            new TopFieldCollectorManager(sort.sort, topN, null, Integer.MAX_VALUE, false).newCollector(),
                             subSearchContext.trackScores() ? new MaxScoreCollector() : null
                         );
                     }
                     topDocsCollectors.put(bucket, collectors);
                 }
 
-                final LeafCollector leafCollector;
-                final int key = leafCollectors.indexOf(bucket);
-                if (key < 0) {
+                LeafCollector leafCollector = leafCollectors.get(bucket);
+                if (leafCollector == null) {
                     leafCollector = collectors.collector.getLeafCollector(ctx);
                     if (scorer != null) {
                         leafCollector.setScorer(scorer);
                     }
-                    leafCollectors.indexInsert(key, bucket, leafCollector);
-                } else {
-                    leafCollector = leafCollectors.indexGet(key);
+                    leafCollectors.put(bucket, leafCollector);
                 }
                 leafCollector.collect(docId);
             }

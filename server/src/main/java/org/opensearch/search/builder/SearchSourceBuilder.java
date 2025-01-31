@@ -33,22 +33,26 @@
 package org.opensearch.search.builder;
 
 import org.opensearch.OpenSearchException;
+import org.opensearch.Version;
 import org.opensearch.common.Booleans;
 import org.opensearch.common.Nullable;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.ParsingException;
-import org.opensearch.common.Strings;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.io.stream.Writeable;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.logging.DeprecationLogger;
 import org.opensearch.common.unit.TimeValue;
-import org.opensearch.common.xcontent.ToXContentFragment;
-import org.opensearch.common.xcontent.ToXContentObject;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentHelper;
-import org.opensearch.common.xcontent.XContentParser;
-import org.opensearch.common.xcontent.XContentType;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.ParsingException;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.ToXContentFragment;
+import org.opensearch.core.xcontent.ToXContentObject;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentHelper;
+import org.opensearch.core.xcontent.XContentParser;
+import org.opensearch.index.mapper.DerivedField;
+import org.opensearch.index.mapper.DerivedFieldMapper;
 import org.opensearch.index.query.QueryBuilder;
 import org.opensearch.index.query.QueryRewriteContext;
 import org.opensearch.index.query.Rewriteable;
@@ -76,6 +80,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import static org.opensearch.index.query.AbstractQueryBuilder.parseInnerQueryBuilder;
@@ -89,8 +94,9 @@ import static org.opensearch.search.internal.SearchContext.TRACK_TOTAL_HITS_DISA
  *
  * @see org.opensearch.action.search.SearchRequest#source(SearchSourceBuilder)
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public final class SearchSourceBuilder implements Writeable, ToXContentObject, Rewriteable<SearchSourceBuilder> {
     private static final DeprecationLogger deprecationLogger = DeprecationLogger.getLogger(SearchSourceBuilder.class);
 
@@ -109,10 +115,12 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
     public static final ParseField DOCVALUE_FIELDS_FIELD = new ParseField("docvalue_fields");
     public static final ParseField FETCH_FIELDS_FIELD = new ParseField("fields");
     public static final ParseField SCRIPT_FIELDS_FIELD = new ParseField("script_fields");
+    public static final ParseField DERIVED_FIELDS_FIELD = new ParseField(DerivedFieldMapper.CONTENT_TYPE);
     public static final ParseField SCRIPT_FIELD = new ParseField("script");
     public static final ParseField IGNORE_FAILURE_FIELD = new ParseField("ignore_failure");
     public static final ParseField SORT_FIELD = new ParseField("sort");
     public static final ParseField TRACK_SCORES_FIELD = new ParseField("track_scores");
+    public static final ParseField INCLUDE_NAMED_QUERIES_SCORE = new ParseField("include_named_queries_score");
     public static final ParseField TRACK_TOTAL_HITS_FIELD = new ParseField("track_total_hits");
     public static final ParseField INDICES_BOOST_FIELD = new ParseField("indices_boost");
     public static final ParseField AGGREGATIONS_FIELD = new ParseField("aggregations");
@@ -127,6 +135,8 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
     public static final ParseField COLLAPSE = new ParseField("collapse");
     public static final ParseField SLICE = new ParseField("slice");
     public static final ParseField POINT_IN_TIME = new ParseField("pit");
+    public static final ParseField SEARCH_PIPELINE = new ParseField("search_pipeline");
+    public static final ParseField VERBOSE_SEARCH_PIPELINE = new ParseField("verbose_pipeline");
 
     public static SearchSourceBuilder fromXContent(XContentParser parser) throws IOException {
         return fromXContent(parser, true);
@@ -170,6 +180,8 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
 
     private boolean trackScores = false;
 
+    private Boolean includeNamedQueriesScore;
+
     private Integer trackTotalHitsUpTo;
 
     private SearchAfterBuilder searchAfterBuilder;
@@ -184,6 +196,10 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
     private StoredFieldsContext storedFieldsContext;
     private List<FieldAndFormat> docValueFields;
     private List<ScriptField> scriptFields;
+    private Map<String, Object> derivedFieldsObject;
+
+    private List<DerivedField> derivedFields;
+
     private FetchSourceContext fetchSourceContext;
     private List<FieldAndFormat> fetchFields;
 
@@ -206,6 +222,12 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
     private CollapseBuilder collapse = null;
 
     private PointInTimeBuilder pointInTimeBuilder = null;
+
+    private Map<String, Object> searchPipelineSource = null;
+
+    private String searchPipeline;
+
+    private boolean verbosePipeline = false;
 
     /**
      * Constructs a new search source builder.
@@ -264,6 +286,28 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
             fetchFields = in.readList(FieldAndFormat::new);
         }
         pointInTimeBuilder = in.readOptionalWriteable(PointInTimeBuilder::new);
+        if (in.getVersion().onOrAfter(Version.V_2_8_0)) {
+            if (in.readBoolean()) {
+                searchPipelineSource = in.readMap();
+            }
+        }
+        if (in.getVersion().onOrAfter(Version.V_2_13_0)) {
+            includeNamedQueriesScore = in.readOptionalBoolean();
+        }
+        if (in.getVersion().onOrAfter(Version.V_2_14_0)) {
+            if (in.readBoolean()) {
+                derivedFieldsObject = in.readMap();
+            }
+            if (in.readBoolean()) {
+                derivedFields = in.readList(DerivedField::new);
+            }
+        }
+        if (in.getVersion().onOrAfter(Version.V_2_18_0)) {
+            searchPipeline = in.readOptionalString();
+        }
+        if (in.getVersion().onOrAfter(Version.V_2_19_0)) {
+            verbosePipeline = in.readBoolean();
+        }
     }
 
     @Override
@@ -323,6 +367,33 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
             out.writeList(fetchFields);
         }
         out.writeOptionalWriteable(pointInTimeBuilder);
+        if (out.getVersion().onOrAfter(Version.V_2_8_0)) {
+            out.writeBoolean(searchPipelineSource != null);
+            if (searchPipelineSource != null) {
+                out.writeMap(searchPipelineSource);
+            }
+        }
+        if (out.getVersion().onOrAfter(Version.V_2_13_0)) {
+            out.writeOptionalBoolean(includeNamedQueriesScore);
+        }
+        if (out.getVersion().onOrAfter(Version.V_2_14_0)) {
+            boolean hasDerivedFieldsObject = derivedFieldsObject != null;
+            out.writeBoolean(hasDerivedFieldsObject);
+            if (hasDerivedFieldsObject) {
+                out.writeMap(derivedFieldsObject);
+            }
+            boolean hasDerivedFields = derivedFields != null;
+            out.writeBoolean(hasDerivedFields);
+            if (hasDerivedFields) {
+                out.writeList(derivedFields);
+            }
+        }
+        if (out.getVersion().onOrAfter(Version.V_2_18_0)) {
+            out.writeOptionalString(searchPipeline);
+        }
+        if (out.getVersion().onOrAfter(Version.V_2_19_0)) {
+            out.writeBoolean(verbosePipeline);
+        }
     }
 
     /**
@@ -364,7 +435,7 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
      */
     public SearchSourceBuilder from(int from) {
         if (from < 0) {
-            throw new IllegalArgumentException("[from] parameter cannot be negative");
+            throw new IllegalArgumentException("[from] parameter cannot be negative, found [" + from + "]");
         }
         this.from = from;
         return this;
@@ -548,6 +619,22 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
     public SearchSourceBuilder trackScores(boolean trackScores) {
         this.trackScores = trackScores;
         return this;
+    }
+
+    /**
+     * Applies when there are named queries, to return the scores along as well
+     * Defaults to {@code false}.
+     */
+    public SearchSourceBuilder includeNamedQueriesScores(boolean includeNamedQueriesScore) {
+        this.includeNamedQueriesScore = includeNamedQueriesScore;
+        return this;
+    }
+
+    /**
+     * Indicates whether scores will be returned as part of every search matched query.s
+     */
+    public boolean includeNamedQueriesScore() {
+        return includeNamedQueriesScore != null && includeNamedQueriesScore;
     }
 
     /**
@@ -912,6 +999,59 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
         return scriptFields;
     }
 
+    public Map<String, Object> getDerivedFieldsObject() {
+        return derivedFieldsObject;
+    }
+
+    public List<DerivedField> getDerivedFields() {
+        return derivedFields;
+    }
+
+    /**
+     * Adds a derived field with the given name with provided type and script
+     * @param name name of the derived field
+     * @param type type of the derived field
+     * @param script script associated with derived field
+     */
+    public SearchSourceBuilder derivedField(String name, String type, Script script) {
+        if (derivedFields == null) {
+            derivedFields = new ArrayList<>();
+        }
+        derivedFields.add(new DerivedField(name, type, script));
+        return this;
+    }
+
+    /**
+     * Adds a derived field with the given name with provided type, script and other parameters
+     * @param name name of the derived field
+     * @param type type of the derived field
+     * @param script script associated with derived field
+     * @param properties map of field name and type of field for nested fields within object derived field
+     * @param prefilterField source text field which is indexed to filter documents for better performance
+     * @param format date format
+     * @param ignoreMalformed ignores malformed fields instead of failing search request
+     */
+    public SearchSourceBuilder derivedField(
+        String name,
+        String type,
+        Script script,
+        Map<String, Object> properties,
+        String prefilterField,
+        String format,
+        Boolean ignoreMalformed
+    ) {
+        if (derivedFields == null) {
+            derivedFields = new ArrayList<>();
+        }
+        DerivedField derivedField = new DerivedField(name, type, script);
+        derivedField.setProperties(properties);
+        derivedField.setPrefilterField(prefilterField);
+        derivedField.setFormat(format);
+        derivedField.setIgnoreMalformed(ignoreMalformed);
+        derivedFields.add(derivedField);
+        return this;
+    }
+
     /**
      * Sets the boost a specific index or alias will receive when the query is executed
      * against it.
@@ -979,6 +1119,56 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
     public SearchSourceBuilder pointInTimeBuilder(PointInTimeBuilder builder) {
         this.pointInTimeBuilder = builder;
         return this;
+    }
+
+    /**
+     * @return a search pipeline defined within the search source (see {@link org.opensearch.search.pipeline.SearchPipelineService})
+     */
+    public Map<String, Object> searchPipelineSource() {
+        return searchPipelineSource;
+    }
+
+    /**
+     * @return a search pipeline name defined within the search source (see {@link org.opensearch.search.pipeline.SearchPipelineService})
+     */
+    public String pipeline() {
+        return searchPipeline;
+    }
+
+    /**
+     * Define a search pipeline to process this search request and/or its response. See {@link org.opensearch.search.pipeline.SearchPipelineService}.
+     */
+    public SearchSourceBuilder searchPipelineSource(Map<String, Object> searchPipelineSource) {
+        this.searchPipelineSource = searchPipelineSource;
+        return this;
+    }
+
+    /**
+     * Define a search pipeline name to process this search request and/or its response. See {@link org.opensearch.search.pipeline.SearchPipelineService}.
+     */
+    public SearchSourceBuilder pipeline(String searchPipeline) {
+        this.searchPipeline = searchPipeline;
+        return this;
+    }
+
+    /**
+     * Enables or disables verbose mode for the search pipeline.
+     *
+     * When verbose mode is enabled, detailed information about each processor
+     * in the search pipeline is included in the search response. This includes
+     * the processor name, execution status, input, output, and time taken for processing.
+     *
+     * This parameter is primarily intended for debugging purposes, allowing users
+     * to track how data flows and transforms through the search pipeline.
+     *
+     */
+    public SearchSourceBuilder verbosePipeline(Boolean verbosePipeline) {
+        this.verbosePipeline = verbosePipeline;
+        return this;
+    }
+
+    public Boolean verbosePipeline() {
+        return verbosePipeline;
     }
 
     /**
@@ -1070,11 +1260,16 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
         rewrittenBuilder.terminateAfter = terminateAfter;
         rewrittenBuilder.timeout = timeout;
         rewrittenBuilder.trackScores = trackScores;
+        rewrittenBuilder.includeNamedQueriesScore = includeNamedQueriesScore;
         rewrittenBuilder.trackTotalHitsUpTo = trackTotalHitsUpTo;
         rewrittenBuilder.version = version;
         rewrittenBuilder.seqNoAndPrimaryTerm = seqNoAndPrimaryTerm;
         rewrittenBuilder.collapse = collapse;
         rewrittenBuilder.pointInTimeBuilder = pointInTimeBuilder;
+        rewrittenBuilder.derivedFieldsObject = derivedFieldsObject;
+        rewrittenBuilder.derivedFields = derivedFields;
+        rewrittenBuilder.searchPipeline = searchPipeline;
+        rewrittenBuilder.verbosePipeline = verbosePipeline;
         return rewrittenBuilder;
     }
 
@@ -1105,9 +1300,9 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
                 currentFieldName = parser.currentName();
             } else if (token.isValue()) {
                 if (FROM_FIELD.match(currentFieldName, parser.getDeprecationHandler())) {
-                    from = parser.intValue();
+                    from(parser.intValue());
                 } else if (SIZE_FIELD.match(currentFieldName, parser.getDeprecationHandler())) {
-                    size = parser.intValue();
+                    size(parser.intValue());
                 } else if (TIMEOUT_FIELD.match(currentFieldName, parser.getDeprecationHandler())) {
                     timeout = TimeValue.parseTimeValue(parser.text(), null, TIMEOUT_FIELD.getPreferredName());
                 } else if (TERMINATE_AFTER_FIELD.match(currentFieldName, parser.getDeprecationHandler())) {
@@ -1122,6 +1317,8 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
                     explain = parser.booleanValue();
                 } else if (TRACK_SCORES_FIELD.match(currentFieldName, parser.getDeprecationHandler())) {
                     trackScores = parser.booleanValue();
+                } else if (INCLUDE_NAMED_QUERIES_SCORE.match(currentFieldName, parser.getDeprecationHandler())) {
+                    includeNamedQueriesScore = parser.booleanValue();
                 } else if (TRACK_TOTAL_HITS_FIELD.match(currentFieldName, parser.getDeprecationHandler())) {
                     if (token == XContentParser.Token.VALUE_BOOLEAN
                         || (token == XContentParser.Token.VALUE_STRING && Booleans.isBoolean(parser.text()))) {
@@ -1140,6 +1337,10 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
                     sort(parser.text());
                 } else if (PROFILE_FIELD.match(currentFieldName, parser.getDeprecationHandler())) {
                     profile = parser.booleanValue();
+                } else if (SEARCH_PIPELINE.match(currentFieldName, parser.getDeprecationHandler())) {
+                    searchPipeline = parser.text();
+                } else if (VERBOSE_SEARCH_PIPELINE.match(currentFieldName, parser.getDeprecationHandler())) {
+                    verbosePipeline = parser.booleanValue();
                 } else {
                     throw new ParsingException(
                         parser.getTokenLocation(),
@@ -1218,6 +1419,10 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
                         collapse = CollapseBuilder.fromXContent(parser);
                     } else if (POINT_IN_TIME.match(currentFieldName, parser.getDeprecationHandler())) {
                         pointInTimeBuilder = PointInTimeBuilder.fromXContent(parser);
+                    } else if (SEARCH_PIPELINE.match(currentFieldName, parser.getDeprecationHandler())) {
+                        searchPipelineSource = parser.mapOrdered();
+                    } else if (DERIVED_FIELDS_FIELD.match(currentFieldName, parser.getDeprecationHandler())) {
+                        derivedFieldsObject = parser.map();
                     } else {
                         throw new ParsingException(
                             parser.getTokenLocation(),
@@ -1383,6 +1588,10 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
             builder.field(TRACK_SCORES_FIELD.getPreferredName(), true);
         }
 
+        if (includeNamedQueriesScore != null) {
+            builder.field(INCLUDE_NAMED_QUERIES_SCORE.getPreferredName(), includeNamedQueriesScore);
+        }
+
         if (trackTotalHitsUpTo != null) {
             builder.field(TRACK_TOTAL_HITS_FIELD.getPreferredName(), trackTotalHitsUpTo);
         }
@@ -1443,6 +1652,32 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
         if (pointInTimeBuilder != null) {
             pointInTimeBuilder.toXContent(builder, params);
         }
+        if (searchPipelineSource != null) {
+            builder.field(SEARCH_PIPELINE.getPreferredName(), searchPipelineSource);
+        }
+
+        if (derivedFieldsObject != null || derivedFields != null) {
+            builder.startObject(DERIVED_FIELDS_FIELD.getPreferredName());
+            if (derivedFieldsObject != null) {
+                builder.mapContents(derivedFieldsObject);
+            }
+            if (derivedFields != null) {
+                for (DerivedField derivedField : derivedFields) {
+                    derivedField.toXContent(builder, params);
+                }
+            }
+            builder.endObject();
+
+        }
+
+        if (searchPipeline != null) {
+            builder.field(SEARCH_PIPELINE.getPreferredName(), searchPipeline);
+        }
+
+        if (verbosePipeline) {
+            builder.field(VERBOSE_SEARCH_PIPELINE.getPreferredName(), verbosePipeline);
+        }
+
         return builder;
     }
 
@@ -1457,8 +1692,9 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
     /**
      * Boosts on an index
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     public static class IndexBoost implements Writeable, ToXContentObject {
         private final String index;
         private final float boost;
@@ -1558,8 +1794,9 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
     /**
      * Script field
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     public static class ScriptField implements Writeable, ToXContentFragment {
 
         private final boolean ignoreFailure;
@@ -1709,13 +1946,18 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
             terminateAfter,
             timeout,
             trackScores,
+            includeNamedQueriesScore,
             version,
             seqNoAndPrimaryTerm,
             profile,
             extBuilders,
             collapse,
             trackTotalHitsUpTo,
-            pointInTimeBuilder
+            pointInTimeBuilder,
+            derivedFieldsObject,
+            derivedFields,
+            searchPipeline,
+            verbosePipeline
         );
     }
 
@@ -1751,13 +1993,18 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
             && Objects.equals(terminateAfter, other.terminateAfter)
             && Objects.equals(timeout, other.timeout)
             && Objects.equals(trackScores, other.trackScores)
+            && Objects.equals(includeNamedQueriesScore, other.includeNamedQueriesScore)
             && Objects.equals(version, other.version)
             && Objects.equals(seqNoAndPrimaryTerm, other.seqNoAndPrimaryTerm)
             && Objects.equals(profile, other.profile)
             && Objects.equals(extBuilders, other.extBuilders)
             && Objects.equals(collapse, other.collapse)
             && Objects.equals(trackTotalHitsUpTo, other.trackTotalHitsUpTo)
-            && Objects.equals(pointInTimeBuilder, other.pointInTimeBuilder);
+            && Objects.equals(pointInTimeBuilder, other.pointInTimeBuilder)
+            && Objects.equals(derivedFieldsObject, other.derivedFieldsObject)
+            && Objects.equals(derivedFields, other.derivedFields)
+            && Objects.equals(searchPipeline, other.searchPipeline)
+            && Objects.equals(verbosePipeline, other.verbosePipeline);
     }
 
     @Override
@@ -1767,8 +2014,8 @@ public final class SearchSourceBuilder implements Writeable, ToXContentObject, R
 
     public String toString(Params params) {
         try {
-            return XContentHelper.toXContent(this, XContentType.JSON, params, true).utf8ToString();
-        } catch (IOException e) {
+            return XContentHelper.toXContent(this, MediaTypeRegistry.JSON, params, true).utf8ToString();
+        } catch (IOException | UnsupportedOperationException e) {
             throw new OpenSearchException(e);
         }
     }

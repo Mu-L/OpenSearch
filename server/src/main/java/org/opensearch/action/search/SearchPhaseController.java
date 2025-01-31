@@ -32,25 +32,23 @@
 
 package org.opensearch.action.search;
 
-import com.carrotsearch.hppc.IntArrayList;
-import com.carrotsearch.hppc.ObjectObjectHashMap;
-
 import org.apache.lucene.index.Term;
 import org.apache.lucene.search.CollectionStatistics;
 import org.apache.lucene.search.FieldDoc;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.SortField;
+import org.apache.lucene.search.SortedNumericSortField;
 import org.apache.lucene.search.TermStatistics;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.search.TopFieldDocs;
 import org.apache.lucene.search.TotalHits;
 import org.apache.lucene.search.TotalHits.Relation;
 import org.apache.lucene.search.grouping.CollapseTopFieldDocs;
-import org.opensearch.common.breaker.CircuitBreaker;
-import org.opensearch.common.collect.HppcMaps;
-import org.opensearch.common.io.stream.NamedWriteableRegistry;
 import org.opensearch.common.lucene.search.TopDocsAndMaxScore;
+import org.opensearch.core.common.breaker.CircuitBreaker;
+import org.opensearch.core.common.io.stream.NamedWriteableRegistry;
+import org.opensearch.index.fielddata.IndexFieldData;
 import org.opensearch.search.DocValueFormat;
 import org.opensearch.search.SearchHit;
 import org.opensearch.search.SearchHits;
@@ -68,6 +66,7 @@ import org.opensearch.search.internal.SearchContext;
 import org.opensearch.search.profile.ProfileShardResult;
 import org.opensearch.search.profile.SearchProfileShardResults;
 import org.opensearch.search.query.QuerySearchResult;
+import org.opensearch.search.sort.SortedWiderNumericSortField;
 import org.opensearch.search.suggest.Suggest;
 import org.opensearch.search.suggest.Suggest.Suggestion;
 import org.opensearch.search.suggest.completion.CompletionSuggestion;
@@ -93,19 +92,19 @@ public final class SearchPhaseController {
     private static final ScoreDoc[] EMPTY_DOCS = new ScoreDoc[0];
 
     private final NamedWriteableRegistry namedWriteableRegistry;
-    private final Function<SearchRequest, InternalAggregation.ReduceContextBuilder> requestToAggReduceContextBuilder;
+    private final Function<SearchSourceBuilder, InternalAggregation.ReduceContextBuilder> requestToAggReduceContextBuilder;
 
     public SearchPhaseController(
         NamedWriteableRegistry namedWriteableRegistry,
-        Function<SearchRequest, InternalAggregation.ReduceContextBuilder> requestToAggReduceContextBuilder
+        Function<SearchSourceBuilder, InternalAggregation.ReduceContextBuilder> requestToAggReduceContextBuilder
     ) {
         this.namedWriteableRegistry = namedWriteableRegistry;
         this.requestToAggReduceContextBuilder = requestToAggReduceContextBuilder;
     }
 
     public AggregatedDfs aggregateDfs(Collection<DfsSearchResult> results) {
-        ObjectObjectHashMap<Term, TermStatistics> termStatistics = HppcMaps.newNoNullKeysMap();
-        ObjectObjectHashMap<String, CollectionStatistics> fieldStatistics = HppcMaps.newNoNullKeysMap();
+        final Map<Term, TermStatistics> termStatistics = new HashMap<>();
+        final Map<String, CollectionStatistics> fieldStatistics = new HashMap<>();
         long aggMaxDoc = 0;
         for (DfsSearchResult lEntry : results) {
             final Term[] terms = lEntry.terms();
@@ -134,29 +133,25 @@ public final class SearchPhaseController {
             }
 
             assert !lEntry.fieldStatistics().containsKey(null);
-            final Object[] keys = lEntry.fieldStatistics().keys;
-            final Object[] values = lEntry.fieldStatistics().values;
-            for (int i = 0; i < keys.length; i++) {
-                if (keys[i] != null) {
-                    String key = (String) keys[i];
-                    CollectionStatistics value = (CollectionStatistics) values[i];
-                    if (value == null) {
-                        continue;
-                    }
-                    assert key != null;
-                    CollectionStatistics existing = fieldStatistics.get(key);
-                    if (existing != null) {
-                        CollectionStatistics merged = new CollectionStatistics(
-                            key,
-                            existing.maxDoc() + value.maxDoc(),
-                            existing.docCount() + value.docCount(),
-                            existing.sumTotalTermFreq() + value.sumTotalTermFreq(),
-                            existing.sumDocFreq() + value.sumDocFreq()
-                        );
-                        fieldStatistics.put(key, merged);
-                    } else {
-                        fieldStatistics.put(key, value);
-                    }
+            for (var entry : lEntry.fieldStatistics().entrySet()) {
+                String key = entry.getKey();
+                CollectionStatistics value = entry.getValue();
+                if (value == null) {
+                    continue;
+                }
+                assert key != null;
+                CollectionStatistics existing = fieldStatistics.get(key);
+                if (existing != null) {
+                    CollectionStatistics merged = new CollectionStatistics(
+                        key,
+                        existing.maxDoc() + value.maxDoc(),
+                        existing.docCount() + value.docCount(),
+                        existing.sumTotalTermFreq() + value.sumTotalTermFreq(),
+                        existing.sumDocFreq() + value.sumDocFreq()
+                    );
+                    fieldStatistics.put(key, merged);
+                } else {
+                    fieldStatistics.put(key, value);
                 }
             }
             aggMaxDoc += lEntry.maxDoc();
@@ -168,7 +163,7 @@ public final class SearchPhaseController {
      * Returns a score doc array of top N search docs across all shards, followed by top suggest docs for each
      * named completion suggestion across all shards. If more than one named completion suggestion is specified in the
      * request, the suggest docs for a named suggestion are ordered by the suggestion name.
-     *
+     * <p>
      * Note: The order of the sorted score docs depends on the shard index in the result array if the merge process needs to disambiguate
      * the result. In oder to obtain stable results the shard index (index of the result in the result array) must be the same.
      *
@@ -235,14 +230,12 @@ public final class SearchPhaseController {
         if (numShards == 1 && from == 0) { // only one shard and no pagination we can just return the topDocs as we got them.
             return topDocs;
         } else if (topDocs instanceof CollapseTopFieldDocs) {
-            CollapseTopFieldDocs firstTopDocs = (CollapseTopFieldDocs) topDocs;
-            final Sort sort = new Sort(firstTopDocs.fields);
             final CollapseTopFieldDocs[] shardTopDocs = results.toArray(new CollapseTopFieldDocs[numShards]);
+            final Sort sort = createSort(shardTopDocs);
             mergedTopDocs = CollapseTopFieldDocs.merge(sort, from, topN, shardTopDocs, false);
         } else if (topDocs instanceof TopFieldDocs) {
-            TopFieldDocs firstTopDocs = (TopFieldDocs) topDocs;
-            final Sort sort = new Sort(firstTopDocs.fields);
             final TopFieldDocs[] shardTopDocs = results.toArray(new TopFieldDocs[numShards]);
+            final Sort sort = createSort(shardTopDocs);
             mergedTopDocs = TopDocs.merge(sort, from, topN, shardTopDocs);
         } else {
             final TopDocs[] shardTopDocs = results.toArray(new TopDocs[numShards]);
@@ -277,12 +270,12 @@ public final class SearchPhaseController {
     /**
      * Builds an array, with potential null elements, with docs to load.
      */
-    public IntArrayList[] fillDocIdsToLoad(int numShards, ScoreDoc[] shardDocs) {
-        IntArrayList[] docIdsToLoad = new IntArrayList[numShards];
+    public List<Integer>[] fillDocIdsToLoad(int numShards, ScoreDoc[] shardDocs) {
+        final List<Integer>[] docIdsToLoad = (List<Integer>[]) new ArrayList<?>[numShards];
         for (ScoreDoc shardDoc : shardDocs) {
-            IntArrayList shardDocIdsToLoad = docIdsToLoad[shardDoc.shardIndex];
+            List<Integer> shardDocIdsToLoad = docIdsToLoad[shardDoc.shardIndex];
             if (shardDocIdsToLoad == null) {
-                shardDocIdsToLoad = docIdsToLoad[shardDoc.shardIndex] = new IntArrayList();
+                shardDocIdsToLoad = docIdsToLoad[shardDoc.shardIndex] = new ArrayList<>();
             }
             shardDocIdsToLoad.add(shardDoc.doc);
         }
@@ -292,7 +285,7 @@ public final class SearchPhaseController {
     /**
      * Enriches search hits and completion suggestion hits from <code>sortedDocs</code> using <code>fetchResultsArr</code>,
      * merges suggestions, aggregations and profile results
-     *
+     * <p>
      * Expects sortedDocs to have top search docs across all shards, optionally followed by top suggest docs for each named
      * completion suggestion ordered by suggestion name
      */
@@ -584,12 +577,14 @@ public final class SearchPhaseController {
                 firstResult = false;
                 ulFormats = new boolean[formats.length];
                 for (int i = 0; i < formats.length; i++) {
-                    ulFormats[i] = formats[i] == DocValueFormat.UNSIGNED_LONG_SHIFTED ? true : false;
+                    ulFormats[i] = (formats[i] == DocValueFormat.UNSIGNED_LONG_SHIFTED || formats[i] == DocValueFormat.UNSIGNED_LONG)
+                        ? true
+                        : false;
                 }
             } else {
                 for (int i = 0; i < formats.length; i++) {
                     // if the format is unsigned_long in one shard, and something different in another shard
-                    if (ulFormats[i] ^ (formats[i] == DocValueFormat.UNSIGNED_LONG_SHIFTED)) {
+                    if (ulFormats[i] ^ (formats[i] == DocValueFormat.UNSIGNED_LONG_SHIFTED || formats[i] == DocValueFormat.UNSIGNED_LONG)) {
                         throw new IllegalArgumentException(
                             "Can't do sort across indices, as a field has [unsigned_long] type "
                                 + "in one index, and different type in another index!"
@@ -597,6 +592,63 @@ public final class SearchPhaseController {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Creates Sort object from topFieldsDocs fields.
+     * It is necessary to widen the SortField.Type to maximum byte size for merging sorted docs.
+     * Different indices might have different types. This will avoid user to do re-index of data
+     * in case of mapping field change for newly indexed data.
+     * This will support Int to Long and Float to Double.
+     * Earlier widening of type was taken care in IndexNumericFieldData, but since we now want to
+     * support sort optimization, we removed type widening there and taking care here during merging.
+     * More details here https://github.com/opensearch-project/OpenSearch/issues/6326
+     */
+    // TODO: should we check the compatibility between types
+    private static Sort createSort(TopFieldDocs[] topFieldDocs) {
+        final SortField[] firstTopDocFields = topFieldDocs[0].fields;
+        final SortField[] newFields = new SortField[firstTopDocFields.length];
+        for (int fieldIndex = 0; fieldIndex < firstTopDocFields.length; fieldIndex++) {
+            SortField.Type firstType = getSortType(firstTopDocFields[fieldIndex]);
+            newFields[fieldIndex] = firstTopDocFields[fieldIndex];
+            if (SortedWiderNumericSortField.isTypeSupported(firstType) == false) {
+                continue;
+            }
+
+            boolean requireWiden = false;
+            boolean isFloat = firstType == SortField.Type.FLOAT || firstType == SortField.Type.DOUBLE;
+            for (int shardIndex = 1; shardIndex < topFieldDocs.length; shardIndex++) {
+                final SortField sortField = topFieldDocs[shardIndex].fields[fieldIndex];
+                SortField.Type sortType = getSortType(sortField);
+                if (SortedWiderNumericSortField.isTypeSupported(sortType) == false) {
+                    // throw exception if sortType is not CUSTOM?
+                    // skip this shard or do not widen?
+                    requireWiden = false;
+                    break;
+                }
+                requireWiden = requireWiden || sortType != firstType;
+                isFloat = isFloat || sortType == SortField.Type.FLOAT || sortType == SortField.Type.DOUBLE;
+            }
+
+            if (requireWiden) {
+                newFields[fieldIndex] = new SortedWiderNumericSortField(
+                    firstTopDocFields[fieldIndex].getField(),
+                    isFloat ? SortField.Type.DOUBLE : SortField.Type.LONG,
+                    firstTopDocFields[fieldIndex].getReverse()
+                );
+            }
+        }
+        return new Sort(newFields);
+    }
+
+    private static SortField.Type getSortType(SortField sortField) {
+        if (sortField.getComparatorSource() instanceof IndexFieldData.XFieldComparatorSource) {
+            return ((IndexFieldData.XFieldComparatorSource) sortField.getComparatorSource()).reducedType();
+        } else {
+            return sortField instanceof SortedNumericSortField
+                ? ((SortedNumericSortField) sortField).getNumericType()
+                : sortField.getType();
         }
     }
 
@@ -693,7 +745,7 @@ public final class SearchPhaseController {
     }
 
     InternalAggregation.ReduceContextBuilder getReduceContext(SearchRequest request) {
-        return requestToAggReduceContextBuilder.apply(request);
+        return requestToAggReduceContextBuilder.apply(request.source());
     }
 
     /**
@@ -766,8 +818,8 @@ public final class SearchPhaseController {
 
         void add(TopDocsAndMaxScore topDocs, boolean timedOut, Boolean terminatedEarly) {
             if (trackTotalHitsUpTo != SearchContext.TRACK_TOTAL_HITS_DISABLED) {
-                totalHits += topDocs.topDocs.totalHits.value;
-                if (topDocs.topDocs.totalHits.relation == Relation.GREATER_THAN_OR_EQUAL_TO) {
+                totalHits += topDocs.topDocs.totalHits.value();
+                if (topDocs.topDocs.totalHits.relation() == Relation.GREATER_THAN_OR_EQUAL_TO) {
                     totalHitsRelation = TotalHits.Relation.GREATER_THAN_OR_EQUAL_TO;
                 }
             }

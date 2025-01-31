@@ -33,19 +33,22 @@ package org.opensearch.repositories;
 
 import org.apache.lucene.index.IndexCommit;
 import org.opensearch.Version;
-import org.opensearch.action.ActionListener;
 import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.ClusterStateUpdateTask;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.cluster.metadata.Metadata;
 import org.opensearch.cluster.metadata.RepositoryMetadata;
 import org.opensearch.cluster.node.DiscoveryNode;
-import org.opensearch.common.component.Lifecycle;
-import org.opensearch.common.component.LifecycleListener;
+import org.opensearch.common.Priority;
+import org.opensearch.common.lifecycle.Lifecycle;
+import org.opensearch.common.lifecycle.LifecycleListener;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.index.mapper.MapperService;
-import org.opensearch.index.shard.ShardId;
 import org.opensearch.index.snapshots.IndexShardSnapshotStatus;
+import org.opensearch.index.snapshots.blobstore.RemoteStoreShardShallowCopySnapshot;
 import org.opensearch.index.store.Store;
+import org.opensearch.index.store.lockmanager.RemoteStoreLockManagerFactory;
 import org.opensearch.indices.recovery.RecoveryState;
 import org.opensearch.snapshots.SnapshotId;
 import org.opensearch.snapshots.SnapshotInfo;
@@ -116,6 +119,29 @@ public class FilterRepository implements Repository {
     }
 
     @Override
+    public void finalizeSnapshot(
+        ShardGenerations shardGenerations,
+        long repositoryStateId,
+        Metadata clusterMetadata,
+        SnapshotInfo snapshotInfo,
+        Version repositoryMetaVersion,
+        Function<ClusterState, ClusterState> stateTransformer,
+        Priority repositoryUpdatePriority,
+        ActionListener<RepositoryData> listener
+    ) {
+        in.finalizeSnapshot(
+            shardGenerations,
+            repositoryStateId,
+            clusterMetadata,
+            snapshotInfo,
+            repositoryMetaVersion,
+            stateTransformer,
+            repositoryUpdatePriority,
+            listener
+        );
+    }
+
+    @Override
     public void deleteSnapshots(
         Collection<SnapshotId> snapshotIds,
         long repositoryStateId,
@@ -136,6 +162,21 @@ public class FilterRepository implements Repository {
     }
 
     @Override
+    public long getRemoteUploadThrottleTimeInNanos() {
+        return in.getRemoteUploadThrottleTimeInNanos();
+    }
+
+    @Override
+    public long getLowPriorityRemoteUploadThrottleTimeInNanos() {
+        return in.getRemoteUploadThrottleTimeInNanos();
+    }
+
+    @Override
+    public long getRemoteDownloadThrottleTimeInNanos() {
+        return in.getRemoteDownloadThrottleTimeInNanos();
+    }
+
+    @Override
     public String startVerification() {
         return in.startVerification();
     }
@@ -153,6 +194,11 @@ public class FilterRepository implements Repository {
     @Override
     public boolean isReadOnly() {
         return in.isReadOnly();
+    }
+
+    @Override
+    public boolean isSystemRepository() {
+        return in.isSystemRepository();
     }
 
     @Override
@@ -183,6 +229,31 @@ public class FilterRepository implements Repository {
     }
 
     @Override
+    public void snapshotRemoteStoreIndexShard(
+        Store store,
+        SnapshotId snapshotId,
+        IndexId indexId,
+        IndexCommit snapshotIndexCommit,
+        String shardStateIdentifier,
+        IndexShardSnapshotStatus snapshotStatus,
+        long primaryTerm,
+        long startTime,
+        ActionListener<String> listener
+    ) {
+        in.snapshotRemoteStoreIndexShard(
+            store,
+            snapshotId,
+            indexId,
+            snapshotIndexCommit,
+            shardStateIdentifier,
+            snapshotStatus,
+            primaryTerm,
+            startTime,
+            listener
+        );
+    }
+
+    @Override
     public void restoreShard(
         Store store,
         SnapshotId snapshotId,
@@ -192,6 +263,15 @@ public class FilterRepository implements Repository {
         ActionListener<Void> listener
     ) {
         in.restoreShard(store, snapshotId, indexId, snapshotShardId, recoveryState, listener);
+    }
+
+    @Override
+    public RemoteStoreShardShallowCopySnapshot getRemoteStoreShallowCopyShardMetadata(
+        SnapshotId snapshotId,
+        IndexId indexId,
+        ShardId snapshotShardId
+    ) {
+        return in.getRemoteStoreShallowCopyShardMetadata(snapshotId, indexId, snapshotShardId);
     }
 
     @Override
@@ -211,6 +291,18 @@ public class FilterRepository implements Repository {
         Consumer<Exception> onFailure
     ) {
         in.executeConsistentStateUpdate(createUpdateTask, source, onFailure);
+    }
+
+    @Override
+    public void cloneRemoteStoreIndexShardSnapshot(
+        SnapshotId source,
+        SnapshotId target,
+        RepositoryShardId shardId,
+        String shardGeneration,
+        RemoteStoreLockManagerFactory remoteStoreLockManagerFactory,
+        ActionListener<String> listener
+    ) {
+        in.cloneRemoteStoreIndexShardSnapshot(source, target, shardId, shardGeneration, remoteStoreLockManagerFactory, listener);
     }
 
     @Override

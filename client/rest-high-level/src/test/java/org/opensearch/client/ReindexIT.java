@@ -33,7 +33,6 @@
 package org.opensearch.client;
 
 import org.opensearch.OpenSearchStatusException;
-import org.opensearch.action.ActionListener;
 import org.opensearch.action.admin.cluster.node.tasks.list.ListTasksResponse;
 import org.opensearch.action.bulk.BulkItemResponse;
 import org.opensearch.action.bulk.BulkRequest;
@@ -42,15 +41,16 @@ import org.opensearch.action.search.SearchRequest;
 import org.opensearch.action.support.WriteRequest;
 import org.opensearch.client.tasks.TaskSubmissionResponse;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.xcontent.XContentType;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.rest.RestStatus;
+import org.opensearch.core.tasks.TaskId;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
 import org.opensearch.index.query.IdsQueryBuilder;
 import org.opensearch.index.reindex.BulkByScrollResponse;
 import org.opensearch.index.reindex.DeleteByQueryAction;
 import org.opensearch.index.reindex.DeleteByQueryRequest;
 import org.opensearch.index.reindex.ReindexRequest;
-import org.opensearch.rest.RestStatus;
 import org.opensearch.tasks.RawTaskStatus;
-import org.opensearch.tasks.TaskId;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -76,9 +76,9 @@ public class ReindexIT extends OpenSearchRestHighLevelClientTestCase {
             createIndex(sourceIndex, settings);
             createIndex(destinationIndex, settings);
             BulkRequest bulkRequest = new BulkRequest().add(
-                new IndexRequest(sourceIndex).id("1").source(Collections.singletonMap("foo", "bar"), XContentType.JSON)
+                new IndexRequest(sourceIndex).id("1").source(Collections.singletonMap("foo", "bar"), MediaTypeRegistry.JSON)
             )
-                .add(new IndexRequest(sourceIndex).id("2").source(Collections.singletonMap("foo2", "bar2"), XContentType.JSON))
+                .add(new IndexRequest(sourceIndex).id("2").source(Collections.singletonMap("foo2", "bar2"), MediaTypeRegistry.JSON))
                 .setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE);
             assertEquals(RestStatus.OK, highLevelClient().bulk(bulkRequest, RequestOptions.DEFAULT).status());
         }
@@ -112,10 +112,9 @@ public class ReindexIT extends OpenSearchRestHighLevelClientTestCase {
             reindexRequest.setRefresh(true);
             reindexRequest.setRequireAlias(true);
 
-            OpenSearchStatusException exception = expectThrows(
-                OpenSearchStatusException.class,
-                () -> { execute(reindexRequest, highLevelClient()::reindex, highLevelClient()::reindexAsync); }
-            );
+            OpenSearchStatusException exception = expectThrows(OpenSearchStatusException.class, () -> {
+                execute(reindexRequest, highLevelClient()::reindex, highLevelClient()::reindexAsync);
+            });
             assertEquals(RestStatus.NOT_FOUND, exception.status());
             assertEquals(
                 "OpenSearch exception [type=index_not_found_exception, reason=no such index [dest] and [require_alias] request flag is [true] and [dest] is not an alias]",
@@ -133,9 +132,9 @@ public class ReindexIT extends OpenSearchRestHighLevelClientTestCase {
             createIndex(sourceIndex, settings);
             createIndex(destinationIndex, settings);
             BulkRequest bulkRequest = new BulkRequest().add(
-                new IndexRequest(sourceIndex).id("1").source(Collections.singletonMap("foo", "bar"), XContentType.JSON)
+                new IndexRequest(sourceIndex).id("1").source(Collections.singletonMap("foo", "bar"), MediaTypeRegistry.JSON)
             )
-                .add(new IndexRequest(sourceIndex).id("2").source(Collections.singletonMap("foo2", "bar2"), XContentType.JSON))
+                .add(new IndexRequest(sourceIndex).id("2").source(Collections.singletonMap("foo2", "bar2"), MediaTypeRegistry.JSON))
                 .setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE);
             assertEquals(RestStatus.OK, highLevelClient().bulk(bulkRequest, RequestOptions.DEFAULT).status());
         }
@@ -164,9 +163,9 @@ public class ReindexIT extends OpenSearchRestHighLevelClientTestCase {
         createIndex(sourceIndex, settings);
         createIndex(destIndex, settings);
         final BulkRequest bulkRequest = new BulkRequest().add(
-            new IndexRequest(sourceIndex).id("1").source(Collections.singletonMap("foo", "bar"), XContentType.JSON)
+            new IndexRequest(sourceIndex).id("1").source(Collections.singletonMap("foo", "bar"), MediaTypeRegistry.JSON)
         )
-            .add(new IndexRequest(sourceIndex).id("2").source(Collections.singletonMap("foo", "bar"), XContentType.JSON))
+            .add(new IndexRequest(sourceIndex).id("2").source(Collections.singletonMap("foo", "bar"), MediaTypeRegistry.JSON))
             .setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE);
         assertThat(highLevelClient().bulk(bulkRequest, RequestOptions.DEFAULT).status(), equalTo(RestStatus.OK));
 
@@ -206,10 +205,10 @@ public class ReindexIT extends OpenSearchRestHighLevelClientTestCase {
                 RestStatus.OK,
                 highLevelClient().bulk(
                     new BulkRequest().add(
-                        new IndexRequest(sourceIndex).id("1").source(Collections.singletonMap("foo", 1), XContentType.JSON)
+                        new IndexRequest(sourceIndex).id("1").source(Collections.singletonMap("foo", 1), MediaTypeRegistry.JSON)
                     )
-                        .add(new IndexRequest(sourceIndex).id("2").source(Collections.singletonMap("foo", 2), XContentType.JSON))
-                        .add(new IndexRequest(sourceIndex).id("3").source(Collections.singletonMap("foo", 3), XContentType.JSON))
+                        .add(new IndexRequest(sourceIndex).id("2").source(Collections.singletonMap("foo", 2), MediaTypeRegistry.JSON))
+                        .add(new IndexRequest(sourceIndex).id("3").source(Collections.singletonMap("foo", 3), MediaTypeRegistry.JSON))
                         .setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE),
                     RequestOptions.DEFAULT
                 ).status()
@@ -237,7 +236,7 @@ public class ReindexIT extends OpenSearchRestHighLevelClientTestCase {
             assertEquals(0, bulkResponse.getSearchFailures().size());
             assertEquals(
                 2,
-                highLevelClient().search(new SearchRequest(sourceIndex), RequestOptions.DEFAULT).getHits().getTotalHits().value
+                highLevelClient().search(new SearchRequest(sourceIndex), RequestOptions.DEFAULT).getHits().getTotalHits().value()
             );
         }
         {
@@ -306,10 +305,10 @@ public class ReindexIT extends OpenSearchRestHighLevelClientTestCase {
                 RestStatus.OK,
                 highLevelClient().bulk(
                     new BulkRequest().add(
-                        new IndexRequest(sourceIndex).id("1").source(Collections.singletonMap("foo", 1), XContentType.JSON)
+                        new IndexRequest(sourceIndex).id("1").source(Collections.singletonMap("foo", 1), MediaTypeRegistry.JSON)
                     )
-                        .add(new IndexRequest(sourceIndex).id("2").source(Collections.singletonMap("foo", 2), XContentType.JSON))
-                        .add(new IndexRequest(sourceIndex).id("3").source(Collections.singletonMap("foo", 3), XContentType.JSON))
+                        .add(new IndexRequest(sourceIndex).id("2").source(Collections.singletonMap("foo", 2), MediaTypeRegistry.JSON))
+                        .add(new IndexRequest(sourceIndex).id("3").source(Collections.singletonMap("foo", 3), MediaTypeRegistry.JSON))
                         .setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE),
                     RequestOptions.DEFAULT
                 ).status()

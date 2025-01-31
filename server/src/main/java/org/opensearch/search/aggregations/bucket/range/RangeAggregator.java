@@ -33,16 +33,16 @@ package org.opensearch.search.aggregations.bucket.range;
 
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.search.ScoreMode;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.io.stream.Writeable;
-import org.opensearch.common.xcontent.ConstructingObjectParser;
-import org.opensearch.common.xcontent.ContextParser;
-import org.opensearch.common.xcontent.ObjectParser.ValueType;
-import org.opensearch.common.xcontent.ToXContentObject;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.xcontent.ConstructingObjectParser;
+import org.opensearch.core.xcontent.ContextParser;
+import org.opensearch.core.xcontent.ObjectParser.ValueType;
+import org.opensearch.core.xcontent.ToXContentObject;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.fielddata.SortedNumericDoubleValues;
 import org.opensearch.search.DocValueFormat;
 import org.opensearch.search.aggregations.Aggregator;
@@ -54,7 +54,10 @@ import org.opensearch.search.aggregations.LeafBucketCollector;
 import org.opensearch.search.aggregations.LeafBucketCollectorBase;
 import org.opensearch.search.aggregations.NonCollectingAggregator;
 import org.opensearch.search.aggregations.bucket.BucketsAggregator;
+import org.opensearch.search.aggregations.bucket.filterrewrite.FilterRewriteOptimizationContext;
+import org.opensearch.search.aggregations.bucket.filterrewrite.RangeAggregatorBridge;
 import org.opensearch.search.aggregations.support.ValuesSource;
+import org.opensearch.search.aggregations.support.ValuesSourceConfig;
 import org.opensearch.search.internal.SearchContext;
 
 import java.io.IOException;
@@ -62,8 +65,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.BiConsumer;
+import java.util.function.Function;
 
-import static org.opensearch.common.xcontent.ConstructingObjectParser.optionalConstructorArg;
+import static org.opensearch.core.xcontent.ConstructingObjectParser.optionalConstructorArg;
+import static org.opensearch.search.aggregations.bucket.filterrewrite.AggregatorBridge.segmentMatchAll;
 
 /**
  * Aggregate all docs that match given ranges.
@@ -245,6 +251,8 @@ public class RangeAggregator extends BucketsAggregator {
 
     final double[] maxTo;
 
+    private final FilterRewriteOptimizationContext filterRewriteOptimizationContext;
+
     public RangeAggregator(
         String name,
         AggregatorFactories factories,
@@ -256,17 +264,16 @@ public class RangeAggregator extends BucketsAggregator {
         SearchContext context,
         Aggregator parent,
         CardinalityUpperBound cardinality,
-        Map<String, Object> metadata
+        Map<String, Object> metadata,
+        ValuesSourceConfig config
     ) throws IOException {
-
         super(name, factories, context, parent, cardinality.multiply(ranges.length), metadata);
         assert valuesSource != null;
         this.valuesSource = valuesSource;
         this.format = format;
         this.keyed = keyed;
         this.rangeFactory = rangeFactory;
-
-        this.ranges = ranges;
+        this.ranges = ranges; // already sorted by the range.from and range.to
 
         maxTo = new double[this.ranges.length];
         maxTo[0] = this.ranges[0].to;
@@ -274,6 +281,23 @@ public class RangeAggregator extends BucketsAggregator {
             maxTo[i] = Math.max(this.ranges[i].to, maxTo[i - 1]);
         }
 
+        RangeAggregatorBridge bridge = new RangeAggregatorBridge() {
+            @Override
+            protected boolean canOptimize() {
+                return canOptimize(config, ranges);
+            }
+
+            @Override
+            protected void prepare() {
+                buildRanges(ranges);
+            }
+
+            @Override
+            protected Function<Object, Long> bucketOrdProducer() {
+                return (activeIndex) -> subBucketOrdinal(0, (int) activeIndex);
+            }
+        };
+        filterRewriteOptimizationContext = new FilterRewriteOptimizationContext(bridge, parent, subAggregators.length, context);
     }
 
     @Override
@@ -285,7 +309,16 @@ public class RangeAggregator extends BucketsAggregator {
     }
 
     @Override
+    protected boolean tryPrecomputeAggregationForLeaf(LeafReaderContext ctx) throws IOException {
+        if (segmentMatchAll(context, ctx)) {
+            return filterRewriteOptimizationContext.tryOptimize(ctx, this::incrementBucketDocCount, false);
+        }
+        return false;
+    }
+
+    @Override
     public LeafBucketCollector getLeafCollector(LeafReaderContext ctx, final LeafBucketCollector sub) throws IOException {
+
         final SortedNumericDoubleValues values = valuesSource.doubleValues(ctx);
         return new LeafBucketCollectorBase(sub, values) {
             @Override
@@ -430,4 +463,9 @@ public class RangeAggregator extends BucketsAggregator {
         }
     }
 
+    @Override
+    public void collectDebugInfo(BiConsumer<String, Object> add) {
+        super.collectDebugInfo(add);
+        filterRewriteOptimizationContext.populateDebugInfo(add);
+    }
 }

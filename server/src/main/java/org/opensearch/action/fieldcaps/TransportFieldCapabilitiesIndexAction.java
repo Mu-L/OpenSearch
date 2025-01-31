@@ -35,7 +35,6 @@ package org.opensearch.action.fieldcaps;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.message.ParameterizedMessage;
-import org.opensearch.action.ActionListener;
 import org.opensearch.action.ActionRunnable;
 import org.opensearch.action.ActionType;
 import org.opensearch.action.NoShardAvailableActionException;
@@ -48,19 +47,21 @@ import org.opensearch.cluster.block.ClusterBlockLevel;
 import org.opensearch.cluster.metadata.IndexNameExpressionResolver;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.node.DiscoveryNodes;
+import org.opensearch.cluster.routing.FailAwareWeightedRouting;
 import org.opensearch.cluster.routing.GroupShardsIterator;
 import org.opensearch.cluster.routing.ShardIterator;
 import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.Nullable;
 import org.opensearch.common.inject.Inject;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.logging.LoggerMessageFormat;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.logging.LoggerMessageFormat;
+import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.index.mapper.MappedFieldType;
 import org.opensearch.index.mapper.MapperService;
 import org.opensearch.index.mapper.ObjectMapper;
 import org.opensearch.index.query.MatchAllQueryBuilder;
-import org.opensearch.index.shard.ShardId;
 import org.opensearch.indices.IndicesService;
 import org.opensearch.search.SearchService;
 import org.opensearch.search.builder.SearchSourceBuilder;
@@ -246,8 +247,7 @@ public class TransportFieldCapabilitiesIndexAction extends HandledTransportActio
                 throw blockException;
             }
 
-            shardsIt = clusterService.operationRouting()
-                .searchShards(clusterService.state(), new String[] { request.index() }, null, null, null, null);
+            shardsIt = clusterService.operationRouting().searchShards(clusterService.state(), new String[] { request.index() }, null, null);
         }
 
         public void start() {
@@ -261,16 +261,18 @@ public class TransportFieldCapabilitiesIndexAction extends HandledTransportActio
             tryNext(e, false);
         }
 
-        private ShardRouting nextRoutingOrNull() {
+        private ShardRouting nextRoutingOrNull(Exception failure) {
             if (shardsIt.size() == 0 || shardIndex >= shardsIt.size()) {
                 return null;
             }
-            ShardRouting next = shardsIt.get(shardIndex).nextOrNull();
+            ShardRouting next = FailAwareWeightedRouting.getInstance()
+                .findNext(shardsIt.get(shardIndex), clusterService.state(), failure, this::moveToNextShard);
+
             if (next != null) {
                 return next;
             }
             moveToNextShard();
-            return nextRoutingOrNull();
+            return nextRoutingOrNull(failure);
         }
 
         private void moveToNextShard() {
@@ -278,7 +280,7 @@ public class TransportFieldCapabilitiesIndexAction extends HandledTransportActio
         }
 
         private void tryNext(@Nullable final Exception lastFailure, boolean canMatchShard) {
-            ShardRouting shardRouting = nextRoutingOrNull();
+            ShardRouting shardRouting = nextRoutingOrNull(lastFailure);
             if (shardRouting == null) {
                 if (canMatchShard == false) {
                     listener.onResponse(new FieldCapabilitiesIndexResponse(request.index(), Collections.emptyMap(), false));

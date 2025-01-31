@@ -31,9 +31,9 @@
 
 package org.opensearch.search.aggregations;
 
-import org.opensearch.common.io.stream.Writeable.Reader;
-import org.opensearch.common.xcontent.XContentParser;
-import org.opensearch.common.xcontent.XContentParser.Token;
+import org.opensearch.core.common.io.stream.Writeable.Reader;
+import org.opensearch.core.xcontent.XContentParser;
+import org.opensearch.core.xcontent.XContentParser.Token;
 import org.opensearch.search.aggregations.InternalOrder.CompoundOrder;
 import org.opensearch.test.AbstractSerializingTestCase;
 

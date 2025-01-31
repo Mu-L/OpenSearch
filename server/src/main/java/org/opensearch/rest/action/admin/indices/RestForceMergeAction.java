@@ -32,14 +32,16 @@
 
 package org.opensearch.rest.action.admin.indices;
 
+import org.opensearch.action.admin.indices.forcemerge.ForceMergeAction;
 import org.opensearch.action.admin.indices.forcemerge.ForceMergeRequest;
 import org.opensearch.action.support.IndicesOptions;
 import org.opensearch.client.node.NodeClient;
-import org.opensearch.common.Strings;
 import org.opensearch.common.logging.DeprecationLogger;
+import org.opensearch.core.common.Strings;
 import org.opensearch.rest.BaseRestHandler;
 import org.opensearch.rest.RestRequest;
 import org.opensearch.rest.action.RestToXContentListener;
+import org.opensearch.tasks.LoggingTaskListener;
 
 import java.io.IOException;
 import java.util.List;
@@ -74,13 +76,23 @@ public class RestForceMergeAction extends BaseRestHandler {
         mergeRequest.maxNumSegments(request.paramAsInt("max_num_segments", mergeRequest.maxNumSegments()));
         mergeRequest.onlyExpungeDeletes(request.paramAsBoolean("only_expunge_deletes", mergeRequest.onlyExpungeDeletes()));
         mergeRequest.flush(request.paramAsBoolean("flush", mergeRequest.flush()));
+        mergeRequest.primaryOnly(request.paramAsBoolean("primary_only", mergeRequest.primaryOnly()));
         if (mergeRequest.onlyExpungeDeletes() && mergeRequest.maxNumSegments() != ForceMergeRequest.Defaults.MAX_NUM_SEGMENTS) {
             deprecationLogger.deprecate(
                 "force_merge_expunge_deletes_and_max_num_segments_deprecation",
                 "setting only_expunge_deletes and max_num_segments at the same time is deprecated and will be rejected in a future version"
             );
         }
-        return channel -> client.admin().indices().forceMerge(mergeRequest, new RestToXContentListener<>(channel));
+        if (request.paramAsBoolean("wait_for_completion", true)) {
+            return channel -> client.admin().indices().forceMerge(mergeRequest, new RestToXContentListener<>(channel));
+        } else {
+            // running force merge asynchronously, return a task immediately and store the task's result when it completes
+            mergeRequest.setShouldStoreResult(true);
+            return sendTask(
+                client.getLocalNodeId(),
+                client.executeLocally(ForceMergeAction.INSTANCE, mergeRequest, LoggingTaskListener.instance())
+            );
+        }
     }
 
 }

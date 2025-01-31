@@ -36,8 +36,10 @@ import groovy.lang.Closure;
 import org.opensearch.gradle.FileSystemOperationsAware;
 import org.opensearch.gradle.test.Fixture;
 import org.opensearch.gradle.util.GradleUtils;
+import org.gradle.api.Project;
 import org.gradle.api.Task;
 import org.gradle.api.provider.Provider;
+import org.gradle.api.services.internal.BuildServiceProvider;
 import org.gradle.api.services.internal.BuildServiceRegistryInternal;
 import org.gradle.api.tasks.CacheableTask;
 import org.gradle.api.tasks.Internal;
@@ -46,6 +48,8 @@ import org.gradle.api.tasks.WorkResult;
 import org.gradle.api.tasks.testing.Test;
 import org.gradle.internal.resources.ResourceLock;
 import org.gradle.internal.resources.SharedResource;
+
+import javax.inject.Inject;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
@@ -61,12 +65,13 @@ import java.util.List;
  * {@link Nested} inputs.
  */
 @CacheableTask
-public class StandaloneRestIntegTestTask extends Test implements TestClustersAware, FileSystemOperationsAware {
+public abstract class StandaloneRestIntegTestTask extends Test implements TestClustersAware, FileSystemOperationsAware {
 
     private Collection<OpenSearchCluster> clusters = new HashSet<>();
     private Closure<Void> beforeStart;
 
-    public StandaloneRestIntegTestTask() {
+    @Inject
+    public StandaloneRestIntegTestTask(Project project) {
         this.getOutputs()
             .doNotCacheIf(
                 "Caching disabled for this task since it uses a cluster shared by other tasks",
@@ -76,7 +81,7 @@ public class StandaloneRestIntegTestTask extends Test implements TestClustersAwa
                  * avoid any undesired behavior we simply disable the cache if we detect that this task uses a cluster shared between
                  * multiple tasks.
                  */
-                t -> getProject().getTasks()
+                t -> project.getTasks()
                     .withType(StandaloneRestIntegTestTask.class)
                     .stream()
                     .filter(task -> task != this)
@@ -123,7 +128,7 @@ public class StandaloneRestIntegTestTask extends Test implements TestClustersAwa
             serviceRegistry,
             TestClustersPlugin.THROTTLE_SERVICE_NAME
         );
-        SharedResource resource = serviceRegistry.forService(throttleProvider);
+        final SharedResource resource = getSharedResource(serviceRegistry, throttleProvider);
 
         int nodeCount = clusters.stream().mapToInt(cluster -> cluster.getNodes().size()).sum();
         if (nodeCount > 0) {
@@ -131,6 +136,37 @@ public class StandaloneRestIntegTestTask extends Test implements TestClustersAwa
         }
 
         return Collections.unmodifiableList(locks);
+    }
+
+    private SharedResource getSharedResource(
+        BuildServiceRegistryInternal serviceRegistry,
+        Provider<TestClustersThrottle> throttleProvider
+    ) {
+        try {
+            try {
+                // The forService(Provider) is used by Gradle pre-8.0
+                return (SharedResource) MethodHandles.publicLookup()
+                    .findVirtual(
+                        BuildServiceRegistryInternal.class,
+                        "forService",
+                        MethodType.methodType(SharedResource.class, Provider.class)
+                    )
+                    .bindTo(serviceRegistry)
+                    .invokeExact(throttleProvider);
+            } catch (NoSuchMethodException | IllegalAccessException ex) {
+                // The forService(BuildServiceProvider) is used by Gradle post-8.0
+                return (SharedResource) MethodHandles.publicLookup()
+                    .findVirtual(
+                        BuildServiceRegistryInternal.class,
+                        "forService",
+                        MethodType.methodType(SharedResource.class, BuildServiceProvider.class)
+                    )
+                    .bindTo(serviceRegistry)
+                    .invokeExact((BuildServiceProvider<TestClustersThrottle, ?>) throttleProvider);
+            }
+        } catch (Throwable ex) {
+            throw new IllegalStateException("Unable to find suitable BuildServiceRegistryInternal::forService", ex);
+        }
     }
 
     private ResourceLock getResourceLock(SharedResource resource, int nUsages) {

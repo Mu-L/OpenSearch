@@ -33,7 +33,8 @@
 package org.opensearch.rest;
 
 import org.opensearch.client.node.NodeClient;
-import org.opensearch.common.xcontent.XContent;
+import org.opensearch.common.annotation.PublicApi;
+import org.opensearch.core.xcontent.XContent;
 import org.opensearch.rest.RestRequest.Method;
 
 import java.util.Collections;
@@ -46,6 +47,7 @@ import java.util.stream.Collectors;
  *
  * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 @FunctionalInterface
 public interface RestHandler {
 
@@ -67,6 +69,14 @@ public interface RestHandler {
      * this endpoint.
      */
     default boolean supportsContentStream() {
+        return false;
+    }
+
+    /**
+     * Indicates if the RestHandler supports request / response streaming. Please note that the transport engine has to support
+     * streaming as well.
+     */
+    default boolean supportsStreaming() {
         return false;
     }
 
@@ -108,10 +118,17 @@ public interface RestHandler {
     }
 
     /**
-     * Controls whether requests handled by this class are allowed to to access system indices by default.
+     * Controls whether requests handled by this class are allowed to access system indices by default.
      * @return {@code true} if requests handled by this class should be allowed to access system indices.
      */
     default boolean allowSystemIndexAccessByDefault() {
+        return false;
+    }
+
+    /**
+     * Denotes whether the RestHandler will output paginated responses or not.
+     */
+    default boolean isActionPaginated() {
         return false;
     }
 
@@ -175,17 +192,28 @@ public interface RestHandler {
         public boolean allowSystemIndexAccessByDefault() {
             return delegate.allowSystemIndexAccessByDefault();
         }
+
+        @Override
+        public boolean isActionPaginated() {
+            return delegate.isActionPaginated();
+        }
+
+        @Override
+        public boolean supportsStreaming() {
+            return delegate.supportsStreaming();
+        }
     }
 
     /**
      * Route for the request.
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     class Route {
 
-        private final String path;
-        private final Method method;
+        protected final String path;
+        protected final Method method;
 
         public Route(Method method, String path) {
             this.path = path;
@@ -196,14 +224,45 @@ public interface RestHandler {
             return path;
         }
 
+        public String getPathWithPathParamsReplaced() {
+            return path.replaceAll("(?<=\\{).*?(?=\\})", "path_param");
+        }
+
         public Method getMethod() {
             return method;
+        }
+
+        @Override
+        public int hashCode() {
+            String routeStr = "Route [method=" + method + ", path=" + getPathWithPathParamsReplaced() + "]";
+            return routeStr.hashCode();
+        }
+
+        @Override
+        public String toString() {
+            return "Route [method=" + method + ", path=" + path + "]";
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            Route that = (Route) o;
+            return Objects.equals(method, that.method)
+                && Objects.equals(getPathWithPathParamsReplaced(), that.getPathWithPathParamsReplaced());
         }
     }
 
     /**
      * Represents an API that has been deprecated and is slated for removal.
+     *
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     class DeprecatedRoute extends Route {
 
         private final String deprecationMessage;
@@ -221,7 +280,10 @@ public interface RestHandler {
     /**
      * Represents an API that has had its {@code path} or {@code method} changed. Holds both the
      * new and previous {@code path} and {@code method} combination.
+     *
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     class ReplacedRoute extends Route {
 
         private final String deprecatedPath;

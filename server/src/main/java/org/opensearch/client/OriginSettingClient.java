@@ -32,12 +32,13 @@
 
 package org.opensearch.client;
 
-import org.opensearch.action.ActionType;
-import org.opensearch.action.ActionListener;
 import org.opensearch.action.ActionRequest;
-import org.opensearch.action.ActionResponse;
+import org.opensearch.action.ActionType;
 import org.opensearch.action.support.ContextPreservingActionListener;
 import org.opensearch.common.util.concurrent.ThreadContext;
+import org.opensearch.common.util.concurrent.ThreadContextAccess;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.action.ActionResponse;
 
 import java.util.function.Supplier;
 
@@ -65,7 +66,11 @@ public final class OriginSettingClient extends FilterClient {
         ActionListener<Response> listener
     ) {
         final Supplier<ThreadContext.StoredContext> supplier = in().threadPool().getThreadContext().newRestorableContext(false);
-        try (ThreadContext.StoredContext ignore = in().threadPool().getThreadContext().stashWithOrigin(origin)) {
+        try (
+            ThreadContext.StoredContext ignore = ThreadContextAccess.doPrivileged(
+                () -> in().threadPool().getThreadContext().stashWithOrigin(origin)
+            )
+        ) {
             super.doExecute(action, request, new ContextPreservingActionListener<>(supplier, listener));
         }
     }

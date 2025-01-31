@@ -38,16 +38,16 @@ import org.apache.lucene.geo.Polygon;
 import org.apache.lucene.search.IndexOrDocValuesQuery;
 import org.apache.lucene.search.MatchNoDocsQuery;
 import org.apache.lucene.search.Query;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.ParsingException;
-import org.opensearch.common.Strings;
 import org.opensearch.common.geo.GeoPoint;
 import org.opensearch.common.geo.GeoUtils;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
-import org.opensearch.common.xcontent.XContentParser.Token;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.ParsingException;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
+import org.opensearch.core.xcontent.XContentParser.Token;
 import org.opensearch.index.mapper.GeoPointFieldMapper.GeoPointFieldType;
 import org.opensearch.index.mapper.MappedFieldType;
 
@@ -61,7 +61,7 @@ import java.util.Objects;
  *
  * @opensearch.internal
  */
-public class GeoPolygonQueryBuilder extends AbstractQueryBuilder<GeoPolygonQueryBuilder> {
+public class GeoPolygonQueryBuilder extends AbstractQueryBuilder<GeoPolygonQueryBuilder> implements WithFieldName {
     public static final String NAME = "geo_polygon";
 
     /**
@@ -114,7 +114,7 @@ public class GeoPolygonQueryBuilder extends AbstractQueryBuilder<GeoPolygonQuery
         int size = in.readVInt();
         shell = new ArrayList<>(size);
         for (int i = 0; i < size; i++) {
-            shell.add(in.readGeoPoint());
+            shell.add(new GeoPoint(in));
         }
         validationMethod = GeoValidationMethod.readFromStream(in);
         ignoreUnmapped = in.readBoolean();
@@ -125,12 +125,13 @@ public class GeoPolygonQueryBuilder extends AbstractQueryBuilder<GeoPolygonQuery
         out.writeString(fieldName);
         out.writeVInt(shell.size());
         for (GeoPoint point : shell) {
-            out.writeGeoPoint(point);
+            point.writeTo(out);
         }
         validationMethod.writeTo(out);
         out.writeBoolean(ignoreUnmapped);
     }
 
+    @Override
     public String fieldName() {
         return fieldName;
     }

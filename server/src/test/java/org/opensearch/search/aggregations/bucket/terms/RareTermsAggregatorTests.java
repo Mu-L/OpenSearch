@@ -41,19 +41,19 @@ import org.apache.lucene.document.SortedNumericDocValuesField;
 import org.apache.lucene.document.SortedSetDocValuesField;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexReader;
-import org.apache.lucene.tests.index.RandomIndexWriter;
-import org.apache.lucene.search.DocValuesFieldExistsQuery;
+import org.apache.lucene.search.FieldExistsQuery;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.MatchNoDocsQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.TotalHits;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.tests.index.RandomIndexWriter;
 import org.apache.lucene.util.BytesRef;
 import org.opensearch.Version;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.text.Text;
+import org.opensearch.core.common.text.Text;
 import org.opensearch.index.IndexSettings;
 import org.opensearch.index.mapper.DocumentMapper;
 import org.opensearch.index.mapper.IdFieldMapper;
@@ -376,25 +376,13 @@ public class RareTermsAggregatorTests extends AggregatorTestCase {
 
             StringTerms.Bucket even = terms.getBucketByKey("even");
             InternalRareTerms<?, ?> evenRare = even.getAggregations().get("rare");
-            assertEquals(
-                evenRare.getBuckets().stream().map(InternalRareTerms.Bucket::getKeyAsString).collect(toList()),
-                org.opensearch.common.collect.List.of("2")
-            );
-            assertEquals(
-                evenRare.getBuckets().stream().map(InternalRareTerms.Bucket::getDocCount).collect(toList()),
-                org.opensearch.common.collect.List.of(2L)
-            );
+            assertEquals(evenRare.getBuckets().stream().map(InternalRareTerms.Bucket::getKeyAsString).collect(toList()), List.of("2"));
+            assertEquals(evenRare.getBuckets().stream().map(InternalRareTerms.Bucket::getDocCount).collect(toList()), List.of(2L));
 
             StringTerms.Bucket odd = terms.getBucketByKey("odd");
             InternalRareTerms<?, ?> oddRare = odd.getAggregations().get("rare");
-            assertEquals(
-                oddRare.getBuckets().stream().map(InternalRareTerms.Bucket::getKeyAsString).collect(toList()),
-                org.opensearch.common.collect.List.of("1")
-            );
-            assertEquals(
-                oddRare.getBuckets().stream().map(InternalRareTerms.Bucket::getDocCount).collect(toList()),
-                org.opensearch.common.collect.List.of(1L)
-            );
+            assertEquals(oddRare.getBuckets().stream().map(InternalRareTerms.Bucket::getKeyAsString).collect(toList()), List.of("1"));
+            assertEquals(oddRare.getBuckets().stream().map(InternalRareTerms.Bucket::getDocCount).collect(toList()), List.of(1L));
         }
     }
 
@@ -460,7 +448,7 @@ public class RareTermsAggregatorTests extends AggregatorTestCase {
                     InternalNested result = searchAndReduce(
                         newIndexSearcher(indexReader),
                         // match root document only
-                        new DocValuesFieldExistsQuery(PRIMARY_TERM_NAME),
+                        new FieldExistsQuery(PRIMARY_TERM_NAME),
                         nested,
                         fieldType
                     );
@@ -504,7 +492,7 @@ public class RareTermsAggregatorTests extends AggregatorTestCase {
                                 () -> searchAndReduce(
                                     newIndexSearcher(indexReader),
                                     // match root document only
-                                    new DocValuesFieldExistsQuery(PRIMARY_TERM_NAME),
+                                    new FieldExistsQuery(PRIMARY_TERM_NAME),
                                     nested,
                                     fieldType
                                 )
@@ -521,7 +509,7 @@ public class RareTermsAggregatorTests extends AggregatorTestCase {
                             InternalNested result = searchAndReduce(
                                 newIndexSearcher(indexReader),
                                 // match root document only
-                                new DocValuesFieldExistsQuery(PRIMARY_TERM_NAME),
+                                new FieldExistsQuery(PRIMARY_TERM_NAME),
                                 nested,
                                 fieldType
                             );
@@ -532,7 +520,7 @@ public class RareTermsAggregatorTests extends AggregatorTestCase {
                                 InternalTopHits topHits = bucket.getAggregations().get("top_hits");
                                 TotalHits hits = topHits.getHits().getTotalHits();
                                 assertNotNull(hits);
-                                assertThat(hits.value, equalTo(counter));
+                                assertThat(hits.value(), equalTo(counter));
                                 assertThat(topHits.getHits().getMaxScore(), equalTo(Float.NaN));
                                 counter += 1;
                             }

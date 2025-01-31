@@ -32,8 +32,8 @@
 
 package org.opensearch.action.admin.indices.cache.clear;
 
-import org.opensearch.action.support.DefaultShardOperationFailedException;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.action.support.DefaultShardOperationFailedException;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.test.AbstractBroadcastResponseTestCase;
 
 import java.util.List;

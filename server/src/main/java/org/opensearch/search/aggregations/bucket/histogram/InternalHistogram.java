@@ -33,9 +33,9 @@ package org.opensearch.search.aggregations.bucket.histogram;
 
 import org.apache.lucene.util.CollectionUtil;
 import org.apache.lucene.util.PriorityQueue;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.search.DocValueFormat;
 import org.opensearch.search.aggregations.Aggregations;
 import org.opensearch.search.aggregations.BucketOrder;
@@ -395,6 +395,7 @@ public final class InternalHistogram extends InternalMultiBucketAggregation<Inte
             // fill with empty buckets
             for (double key = round(emptyBucketInfo.minBound); key <= emptyBucketInfo.maxBound; key = nextKey(key)) {
                 iter.add(new Bucket(key, 0, keyed, format, reducedEmptySubAggs));
+                reduceContext.consumeBucketsAndMaybeBreak(0);
             }
         } else {
             Bucket first = list.get(iter.nextIndex());
@@ -402,11 +403,12 @@ public final class InternalHistogram extends InternalMultiBucketAggregation<Inte
                 // fill with empty buckets until the first key
                 for (double key = round(emptyBucketInfo.minBound); key < first.key; key = nextKey(key)) {
                     iter.add(new Bucket(key, 0, keyed, format, reducedEmptySubAggs));
+                    reduceContext.consumeBucketsAndMaybeBreak(0);
                 }
             }
 
             // now adding the empty buckets within the actual data,
-            // e.g. if the data series is [1,2,3,7] there're 3 empty buckets that will be created for 4,5,6
+            // e.g. if the data series is [1,2,3,7] there are 3 empty buckets that will be created for 4,5,6
             Bucket lastBucket = null;
             do {
                 Bucket nextBucket = list.get(iter.nextIndex());
@@ -414,6 +416,7 @@ public final class InternalHistogram extends InternalMultiBucketAggregation<Inte
                     double key = nextKey(lastBucket.key);
                     while (key < nextBucket.key) {
                         iter.add(new Bucket(key, 0, keyed, format, reducedEmptySubAggs));
+                        reduceContext.consumeBucketsAndMaybeBreak(0);
                         key = nextKey(key);
                     }
                     assert key == nextBucket.key || Double.isNaN(nextBucket.key) : "key: " + key + ", nextBucket.key: " + nextBucket.key;
@@ -424,6 +427,7 @@ public final class InternalHistogram extends InternalMultiBucketAggregation<Inte
             // finally, adding the empty buckets *after* the actual data (based on the extended_bounds.max requested by the user)
             for (double key = nextKey(lastBucket.key); key <= emptyBucketInfo.maxBound; key = nextKey(key)) {
                 iter.add(new Bucket(key, 0, keyed, format, reducedEmptySubAggs));
+                reduceContext.consumeBucketsAndMaybeBreak(0);
             }
         }
     }

@@ -42,10 +42,9 @@ import org.apache.lucene.document.LongPoint;
 import org.apache.lucene.document.SortedNumericDocValuesField;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.DirectoryReader;
-import org.apache.lucene.tests.index.RandomIndexWriter;
 import org.apache.lucene.index.Term;
+import org.apache.lucene.sandbox.document.BigIntegerPoint;
 import org.apache.lucene.sandbox.document.HalfFloatPoint;
-import org.apache.lucene.tests.search.AssertingIndexSearcher;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.SortField;
 import org.apache.lucene.search.SortedNumericSelector;
@@ -54,10 +53,12 @@ import org.apache.lucene.search.SortedSetSelector;
 import org.apache.lucene.search.SortedSetSortField;
 import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.tests.index.RandomIndexWriter;
+import org.apache.lucene.tests.search.AssertingIndexSearcher;
 import org.apache.lucene.util.BytesRef;
-import org.opensearch.common.xcontent.XContentParseException;
-import org.opensearch.common.xcontent.XContentParser;
 import org.opensearch.common.xcontent.json.JsonXContent;
+import org.opensearch.core.xcontent.XContentParseException;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.fielddata.IndexFieldData.XFieldComparatorSource;
 import org.opensearch.index.fielddata.IndexFieldData.XFieldComparatorSource.Nested;
 import org.opensearch.index.mapper.DateFieldMapper;
@@ -78,6 +79,7 @@ import org.opensearch.search.SearchSortValuesAndFormats;
 import org.opensearch.search.builder.SearchSourceBuilder;
 
 import java.io.IOException;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -194,6 +196,7 @@ public class FieldSortBuilderTests extends AbstractSortTestCase<FieldSortBuilder
         assertEquals(builder.order() == SortOrder.ASC ? false : true, sortField.getReverse());
         if (expectedType == SortField.Type.CUSTOM) {
             assertEquals(builder.getFieldName(), sortField.getField());
+            assertEquals(builder.fieldName(), sortField.getField());
         }
         assertEquals(DocValueFormat.RAW, format);
     }
@@ -504,7 +507,7 @@ public class FieldSortBuilderTests extends AbstractSortTestCase<FieldSortBuilder
 
                             case INTEGER:
                                 int v2 = randomInt();
-                                values[i] = (long) v2;
+                                values[i] = (int) v2;
                                 doc.add(new IntPoint(fieldName, v2));
                                 break;
 
@@ -528,14 +531,20 @@ public class FieldSortBuilderTests extends AbstractSortTestCase<FieldSortBuilder
 
                             case BYTE:
                                 byte v6 = randomByte();
-                                values[i] = (long) v6;
+                                values[i] = (int) v6;
                                 doc.add(new IntPoint(fieldName, v6));
                                 break;
 
                             case SHORT:
                                 short v7 = randomShort();
-                                values[i] = (long) v7;
+                                values[i] = (int) v7;
                                 doc.add(new IntPoint(fieldName, v7));
+                                break;
+
+                            case UNSIGNED_LONG:
+                                BigInteger v8 = randomUnsignedLong();
+                                values[i] = v8;
+                                doc.add(new BigIntegerPoint(fieldName, v8));
                                 break;
 
                             default:
@@ -546,7 +555,8 @@ public class FieldSortBuilderTests extends AbstractSortTestCase<FieldSortBuilder
                     Arrays.sort(values);
                     try (DirectoryReader reader = writer.getReader()) {
                         QueryShardContext newContext = createMockShardContext(new AssertingIndexSearcher(random(), reader));
-                        if (numberType == NumberFieldMapper.NumberType.HALF_FLOAT) {
+                        if (numberType == NumberFieldMapper.NumberType.HALF_FLOAT
+                            || numberType == NumberFieldMapper.NumberType.UNSIGNED_LONG) {
                             assertNull(getMinMaxOrNull(newContext, SortBuilders.fieldSort(fieldName + "-ni")));
                             assertNull(getMinMaxOrNull(newContext, SortBuilders.fieldSort(fieldName)));
                         } else {

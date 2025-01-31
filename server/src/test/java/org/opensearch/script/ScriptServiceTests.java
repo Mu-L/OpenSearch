@@ -36,15 +36,15 @@ import org.opensearch.action.admin.cluster.storedscripts.GetStoredScriptRequest;
 import org.opensearch.cluster.ClusterName;
 import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.metadata.Metadata;
-import org.opensearch.common.breaker.CircuitBreakingException;
-import org.opensearch.common.bytes.BytesArray;
-import org.opensearch.common.bytes.BytesReference;
 import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.common.xcontent.XContentFactory;
-import org.opensearch.common.xcontent.XContentType;
+import org.opensearch.core.common.breaker.CircuitBreakingException;
+import org.opensearch.core.common.bytes.BytesArray;
+import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
 import org.opensearch.env.Environment;
 import org.opensearch.test.OpenSearchTestCase;
 import org.junit.Before;
@@ -60,8 +60,8 @@ import java.util.function.Function;
 import static org.opensearch.script.ScriptService.SCRIPT_CACHE_EXPIRE_SETTING;
 import static org.opensearch.script.ScriptService.SCRIPT_CACHE_SIZE_SETTING;
 import static org.opensearch.script.ScriptService.SCRIPT_GENERAL_CACHE_EXPIRE_SETTING;
-import static org.opensearch.script.ScriptService.SCRIPT_GENERAL_MAX_COMPILATIONS_RATE_SETTING;
 import static org.opensearch.script.ScriptService.SCRIPT_GENERAL_CACHE_SIZE_SETTING;
+import static org.opensearch.script.ScriptService.SCRIPT_GENERAL_MAX_COMPILATIONS_RATE_SETTING;
 import static org.opensearch.script.ScriptService.SCRIPT_MAX_COMPILATIONS_RATE_SETTING;
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.Matchers.is;
@@ -375,7 +375,11 @@ public class ScriptServiceTests extends OpenSearchTestCase {
                 .endObject()
                 .endObject()
         );
-        ScriptMetadata scriptMetadata = ScriptMetadata.putStoredScript(null, "_id", StoredScriptSource.parse(script, XContentType.JSON));
+        ScriptMetadata scriptMetadata = ScriptMetadata.putStoredScript(
+            null,
+            "_id",
+            StoredScriptSource.parse(script, MediaTypeRegistry.JSON)
+        );
         assertNotNull(scriptMetadata);
         assertEquals("abc", scriptMetadata.getStoredScript("_id").getSource());
     }
@@ -384,17 +388,16 @@ public class ScriptServiceTests extends OpenSearchTestCase {
         ScriptMetadata scriptMetadata = ScriptMetadata.putStoredScript(
             null,
             "_id",
-            StoredScriptSource.parse(new BytesArray("{\"script\": {\"lang\": \"_lang\", \"source\": \"abc\"} }"), XContentType.JSON)
+            StoredScriptSource.parse(new BytesArray("{\"script\": {\"lang\": \"_lang\", \"source\": \"abc\"} }"), MediaTypeRegistry.JSON)
         );
         scriptMetadata = ScriptMetadata.deleteStoredScript(scriptMetadata, "_id");
         assertNotNull(scriptMetadata);
         assertNull(scriptMetadata.getStoredScript("_id"));
 
         ScriptMetadata errorMetadata = scriptMetadata;
-        ResourceNotFoundException e = expectThrows(
-            ResourceNotFoundException.class,
-            () -> { ScriptMetadata.deleteStoredScript(errorMetadata, "_id"); }
-        );
+        ResourceNotFoundException e = expectThrows(ResourceNotFoundException.class, () -> {
+            ScriptMetadata.deleteStoredScript(errorMetadata, "_id");
+        });
         assertEquals("stored script [_id] does not exist and cannot be deleted", e.getMessage());
     }
 
@@ -409,7 +412,7 @@ public class ScriptServiceTests extends OpenSearchTestCase {
                             "_id",
                             StoredScriptSource.parse(
                                 new BytesArray("{\"script\": {\"lang\": \"_lang\", \"source\": \"abc\"} }"),
-                                XContentType.JSON
+                                MediaTypeRegistry.JSON
                             )
                         ).build()
                     )
@@ -425,24 +428,17 @@ public class ScriptServiceTests extends OpenSearchTestCase {
     public void testMaxSizeLimit() throws Exception {
         buildScriptService(Settings.builder().put(ScriptService.SCRIPT_MAX_SIZE_IN_BYTES.getKey(), 4).build());
         scriptService.compile(new Script(ScriptType.INLINE, "test", "1+1", Collections.emptyMap()), randomFrom(contexts.values()));
-        IllegalArgumentException iae = expectThrows(
-            IllegalArgumentException.class,
-            () -> {
-                scriptService.compile(
-                    new Script(ScriptType.INLINE, "test", "10+10", Collections.emptyMap()),
-                    randomFrom(contexts.values())
-                );
-            }
-        );
+        IllegalArgumentException iae = expectThrows(IllegalArgumentException.class, () -> {
+            scriptService.compile(new Script(ScriptType.INLINE, "test", "10+10", Collections.emptyMap()), randomFrom(contexts.values()));
+        });
         assertEquals("exceeded max allowed inline script size in bytes [4] with size [5] for script [10+10]", iae.getMessage());
         clusterSettings.applySettings(Settings.builder().put(ScriptService.SCRIPT_MAX_SIZE_IN_BYTES.getKey(), 6).build());
         scriptService.compile(new Script(ScriptType.INLINE, "test", "10+10", Collections.emptyMap()), randomFrom(contexts.values()));
         clusterSettings.applySettings(Settings.builder().put(ScriptService.SCRIPT_MAX_SIZE_IN_BYTES.getKey(), 5).build());
         scriptService.compile(new Script(ScriptType.INLINE, "test", "10+10", Collections.emptyMap()), randomFrom(contexts.values()));
-        iae = expectThrows(
-            IllegalArgumentException.class,
-            () -> { clusterSettings.applySettings(Settings.builder().put(ScriptService.SCRIPT_MAX_SIZE_IN_BYTES.getKey(), 2).build()); }
-        );
+        iae = expectThrows(IllegalArgumentException.class, () -> {
+            clusterSettings.applySettings(Settings.builder().put(ScriptService.SCRIPT_MAX_SIZE_IN_BYTES.getKey(), 2).build());
+        });
         assertEquals(
             "script.max_size_in_bytes cannot be set to [2], stored script [test1] exceeds the new value with a size of [3]",
             iae.getMessage()
@@ -537,10 +533,9 @@ public class ScriptServiceTests extends OpenSearchTestCase {
 
         assertEquals(ScriptService.SCRIPT_GENERAL_MAX_COMPILATIONS_RATE_SETTING.get(s), ScriptService.USE_CONTEXT_RATE_VALUE);
 
-        IllegalArgumentException illegal = expectThrows(
-            IllegalArgumentException.class,
-            () -> { ScriptService.SCRIPT_MAX_COMPILATIONS_RATE_SETTING.getAsMap(s); }
-        );
+        IllegalArgumentException illegal = expectThrows(IllegalArgumentException.class, () -> {
+            ScriptService.SCRIPT_MAX_COMPILATIONS_RATE_SETTING.getAsMap(s);
+        });
 
         assertEquals("parameter must contain a positive integer and a timevalue, i.e. 10/1m, but was [use-context]", illegal.getMessage());
         assertSettingDeprecationsAndWarnings(new Setting<?>[] { SCRIPT_GENERAL_MAX_COMPILATIONS_RATE_SETTING });

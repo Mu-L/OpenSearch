@@ -32,19 +32,21 @@
 
 package org.opensearch.script.mustache;
 
+import org.opensearch.ExceptionsHelper;
 import org.opensearch.OpenSearchException;
-import org.opensearch.action.ActionResponse;
 import org.opensearch.action.search.MultiSearchResponse;
 import org.opensearch.common.Nullable;
-import org.opensearch.common.Strings;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.io.stream.Writeable;
 import org.opensearch.common.unit.TimeValue;
-import org.opensearch.common.xcontent.ToXContent;
-import org.opensearch.common.xcontent.ToXContentObject;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.action.ActionResponse;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.ToXContent;
+import org.opensearch.core.xcontent.ToXContentObject;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -166,6 +168,7 @@ public class MultiSearchTemplateResponse extends ActionResponse implements Itera
             if (item.isFailure()) {
                 builder.startObject();
                 OpenSearchException.generateFailureXContent(builder, params, item.getFailure(), true);
+                builder.field(Fields.STATUS, ExceptionsHelper.status(item.getFailure()).getStatus());
                 builder.endObject();
             } else {
                 item.getResponse().toXContent(builder, params);
@@ -178,6 +181,7 @@ public class MultiSearchTemplateResponse extends ActionResponse implements Itera
 
     static final class Fields {
         static final String RESPONSES = "responses";
+        static final String STATUS = "status";
     }
 
     public static MultiSearchTemplateResponse fromXContext(XContentParser parser) {
@@ -199,6 +203,6 @@ public class MultiSearchTemplateResponse extends ActionResponse implements Itera
 
     @Override
     public String toString() {
-        return Strings.toString(this);
+        return Strings.toString(MediaTypeRegistry.JSON, this);
     }
 }

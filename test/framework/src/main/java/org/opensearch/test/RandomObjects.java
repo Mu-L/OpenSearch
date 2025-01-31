@@ -44,18 +44,19 @@ import org.opensearch.action.support.replication.ReplicationResponse.ShardInfo;
 import org.opensearch.action.support.replication.ReplicationResponse.ShardInfo.Failure;
 import org.opensearch.cluster.block.ClusterBlockException;
 import org.opensearch.cluster.coordination.NoClusterManagerBlockService;
-import org.opensearch.common.bytes.BytesArray;
-import org.opensearch.common.bytes.BytesReference;
 import org.opensearch.common.collect.Tuple;
-import org.opensearch.common.xcontent.ToXContent;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentFactory;
-import org.opensearch.common.xcontent.XContentParser;
 import org.opensearch.common.xcontent.XContentType;
+import org.opensearch.core.common.bytes.BytesArray;
+import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.index.shard.ShardId;
+import org.opensearch.core.rest.RestStatus;
+import org.opensearch.core.xcontent.MediaType;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.ToXContent;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.shard.IndexShardRecoveringException;
-import org.opensearch.index.shard.ShardId;
 import org.opensearch.index.shard.ShardNotFoundException;
-import org.opensearch.rest.RestStatus;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -66,12 +67,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
-import static com.carrotsearch.randomizedtesting.generators.RandomNumbers.randomIntBetween;
-import static com.carrotsearch.randomizedtesting.generators.RandomStrings.randomAsciiLettersOfLength;
-import static com.carrotsearch.randomizedtesting.generators.RandomStrings.randomUnicodeOfLengthBetween;
 import static java.util.Collections.singleton;
 import static org.opensearch.cluster.metadata.IndexMetadata.INDEX_UUID_NA_VALUE;
 import static org.opensearch.test.OpenSearchTestCase.randomFrom;
+import static com.carrotsearch.randomizedtesting.generators.RandomNumbers.randomIntBetween;
+import static com.carrotsearch.randomizedtesting.generators.RandomStrings.randomAsciiLettersOfLength;
+import static com.carrotsearch.randomizedtesting.generators.RandomStrings.randomUnicodeOfLengthBetween;
 
 public final class RandomObjects {
 
@@ -81,20 +82,23 @@ public final class RandomObjects {
 
     /**
      * Returns a tuple containing random stored field values and their corresponding expected values once printed out
-     * via {@link org.opensearch.common.xcontent.ToXContent#toXContent(XContentBuilder, ToXContent.Params)} and parsed back via
-     * {@link org.opensearch.common.xcontent.XContentParser#objectText()}.
+     * via {@link ToXContent#toXContent(XContentBuilder, ToXContent.Params)} and parsed back via
+     * {@link XContentParser#objectText()}.
      * Generates values based on what can get printed out. Stored fields values are retrieved from lucene and converted via
      * {@link org.opensearch.index.mapper.MappedFieldType#valueForDisplay(Object)} to either strings, numbers or booleans.
      *
      * @param random Random generator
-     * @param xContentType the content type, used to determine what the expected values are for float numbers.
+     * @param mediaType the content type, used to determine what the expected values are for float numbers.
      */
-    public static Tuple<List<Object>, List<Object>> randomStoredFieldValues(Random random, XContentType xContentType) {
+    public static Tuple<List<Object>, List<Object>> randomStoredFieldValues(Random random, MediaType mediaType) {
+        if (mediaType instanceof XContentType == false) {
+            throw new IllegalArgumentException("Unable to parse media type [" + mediaType.getClass().getName() + "]");
+        }
         int numValues = randomIntBetween(random, 1, 5);
         List<Object> originalValues = randomStoredFieldValues(random, numValues);
         List<Object> expectedParsedValues = new ArrayList<>(numValues);
         for (Object originalValue : originalValues) {
-            expectedParsedValues.add(getExpectedParsedValue(xContentType, originalValue));
+            expectedParsedValues.add(getExpectedParsedValue(mediaType, originalValue));
         }
         return Tuple.tuple(originalValues, expectedParsedValues);
     }
@@ -145,20 +149,20 @@ public final class RandomObjects {
 
     /**
      * Converts the provided field value to its corresponding expected value once printed out
-     * via {@link org.opensearch.common.xcontent.ToXContent#toXContent(XContentBuilder, ToXContent.Params)} and parsed back via
-     * {@link org.opensearch.common.xcontent.XContentParser#objectText()}.
+     * via {@link ToXContent#toXContent(XContentBuilder, ToXContent.Params)} and parsed back via
+     * {@link XContentParser#objectText()}.
      * Generates values based on what can get printed out. Stored fields values are retrieved from lucene and converted via
      * {@link org.opensearch.index.mapper.MappedFieldType#valueForDisplay(Object)} to either strings, numbers or booleans.
      */
-    public static Object getExpectedParsedValue(XContentType xContentType, Object value) {
+    public static Object getExpectedParsedValue(MediaType mediaType, Object value) {
         if (value instanceof BytesArray) {
-            if (xContentType == XContentType.JSON) {
+            if (mediaType == MediaTypeRegistry.JSON) {
                 // JSON writes base64 format
                 return Base64.getEncoder().encodeToString(((BytesArray) value).toBytesRef().bytes);
             }
         }
         if (value instanceof Float) {
-            if (xContentType == XContentType.CBOR || xContentType == XContentType.SMILE) {
+            if (mediaType == XContentType.CBOR || mediaType == XContentType.SMILE) {
                 // with binary content types we pass back the object as is
                 return value;
             }
@@ -190,8 +194,8 @@ public final class RandomObjects {
      *
      * @param random Random generator
      */
-    public static BytesReference randomSource(Random random, XContentType xContentType) {
-        return randomSource(random, xContentType, 1);
+    public static BytesReference randomSource(Random random, final MediaType mediaType) {
+        return randomSource(random, mediaType, 1);
     }
 
     /**
@@ -200,8 +204,8 @@ public final class RandomObjects {
      *
      * @param random Random generator
      */
-    public static BytesReference randomSource(Random random, XContentType xContentType, int minNumFields) {
-        try (XContentBuilder builder = XContentFactory.contentBuilder(xContentType)) {
+    public static BytesReference randomSource(Random random, final MediaType mediaType, int minNumFields) {
+        try (XContentBuilder builder = mediaType.contentBuilder()) {
             builder.startObject();
             addFields(random, builder, minNumFields, 0);
             builder.endObject();

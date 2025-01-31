@@ -1,7 +1,7 @@
 {
   "indices.shrink":{
     "documentation":{
-      "url":"https://www.elastic.co/guide/en/elasticsearch/reference/master/indices-shrink-index.html",
+      "url":"https://opensearch.org/docs/latest/api-reference/index-apis/shrink-index/",
       "description":"Allow to shrink an existing index into a new index with fewer primary shards."
     },
     "stability":"stable",
@@ -50,6 +50,14 @@
       "wait_for_active_shards": {
         "type" : "string",
         "description" : "Set the number of active shards to wait for on the shrunken index before the operation returns."
+      },
+      "wait_for_completion": {
+        "type" : "boolean",
+        "description" : "If false, the request will return a task immediately and the operation will run in background. Defaults to true."
+      },
+      "task_execution_timeout": {
+        "type" : "time",
+        "description" : "Explicit task execution timeout, only useful when wait_for_completion is false, defaults to 1h."
       }
     },
     "body":{

@@ -8,31 +8,26 @@
 
 package org.opensearch.common.util;
 
-import org.junit.BeforeClass;
-import org.opensearch.common.SuppressForbidden;
+import org.opensearch.common.settings.Settings;
+import org.opensearch.test.FeatureFlagSetter;
 import org.opensearch.test.OpenSearchTestCase;
 
-import java.security.AccessController;
-import java.security.PrivilegedAction;
+import static org.opensearch.common.util.FeatureFlags.DATETIME_FORMATTER_CACHING;
+import static org.opensearch.common.util.FeatureFlags.EXTENSIONS;
 
 public class FeatureFlagTests extends OpenSearchTestCase {
 
-    @SuppressForbidden(reason = "sets the feature flag")
-    @BeforeClass
-    public static void enableFeature() {
-        AccessController.doPrivileged((PrivilegedAction<String>) () -> System.setProperty(FeatureFlags.REPLICATION_TYPE, "true"));
-        AccessController.doPrivileged((PrivilegedAction<String>) () -> System.setProperty(FeatureFlags.REMOTE_STORE, "true"));
-        AccessController.doPrivileged((PrivilegedAction<String>) () -> System.setProperty(FeatureFlags.EXTENSIONS, "true"));
-    }
+    private final String FLAG_PREFIX = "opensearch.experimental.feature.";
 
-    public void testReplicationTypeFeatureFlag() {
-        String replicationTypeFlag = FeatureFlags.REPLICATION_TYPE;
-        assertNotNull(System.getProperty(replicationTypeFlag));
-        assertTrue(FeatureFlags.isEnabled(replicationTypeFlag));
+    public void testFeatureFlagSet() {
+        final String testFlag = FLAG_PREFIX + "testFlag";
+        FeatureFlagSetter.set(testFlag);
+        assertNotNull(System.getProperty(testFlag));
+        assertTrue(FeatureFlags.isEnabled(testFlag));
     }
 
     public void testMissingFeatureFlag() {
-        String testFlag = "missingFeatureFlag";
+        final String testFlag = FLAG_PREFIX + "testFlag";
         assertNull(System.getProperty(testFlag));
         assertFalse(FeatureFlags.isEnabled(testFlag));
     }
@@ -43,10 +38,24 @@ public class FeatureFlagTests extends OpenSearchTestCase {
         assertFalse(FeatureFlags.isEnabled(javaVersionProperty));
     }
 
-    public void testRemoteStoreFeatureFlag() {
-        String remoteStoreFlag = FeatureFlags.REMOTE_STORE;
-        assertNotNull(System.getProperty(remoteStoreFlag));
-        assertTrue(FeatureFlags.isEnabled(remoteStoreFlag));
+    public void testBooleanFeatureFlagWithDefaultSetToFalse() {
+        final String testFlag = EXTENSIONS;
+        FeatureFlags.initializeFeatureFlags(Settings.EMPTY);
+        assertNotNull(testFlag);
+        assertFalse(FeatureFlags.isEnabled(testFlag));
     }
 
+    public void testBooleanFeatureFlagInitializedWithEmptySettingsAndDefaultSetToFalse() {
+        final String testFlag = DATETIME_FORMATTER_CACHING;
+        FeatureFlags.initializeFeatureFlags(Settings.EMPTY);
+        assertFalse(FeatureFlags.isEnabled(testFlag));
+    }
+
+    public void testInitializeFeatureFlagsWithExperimentalSettings() {
+        FeatureFlags.initializeFeatureFlags(Settings.builder().put(EXTENSIONS, true).build());
+        assertTrue(FeatureFlags.isEnabled(EXTENSIONS));
+        assertFalse(FeatureFlags.isEnabled(DATETIME_FORMATTER_CACHING));
+        // reset FeatureFlags to defaults
+        FeatureFlags.initializeFeatureFlags(Settings.EMPTY);
+    }
 }

@@ -31,6 +31,19 @@
 
 package org.opensearch.repositories.hdfs;
 
+import org.apache.hadoop.hdfs.protocolPB.ClientNamenodeProtocolPB;
+import org.apache.hadoop.security.KerberosInfo;
+import org.apache.hadoop.security.SecurityUtil;
+import org.opensearch.SpecialPermission;
+import org.opensearch.cluster.service.ClusterService;
+import org.opensearch.common.SuppressForbidden;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
+import org.opensearch.env.Environment;
+import org.opensearch.indices.recovery.RecoverySettings;
+import org.opensearch.plugins.Plugin;
+import org.opensearch.plugins.RepositoryPlugin;
+import org.opensearch.repositories.Repository;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -39,19 +52,7 @@ import java.security.PrivilegedAction;
 import java.util.Collections;
 import java.util.Map;
 
-import org.apache.hadoop.hdfs.protocolPB.ClientNamenodeProtocolPB;
-import org.apache.hadoop.security.KerberosInfo;
-import org.apache.hadoop.security.SecurityUtil;
-import org.opensearch.SpecialPermission;
-import org.opensearch.cluster.service.ClusterService;
-import org.opensearch.common.SuppressForbidden;
-import org.opensearch.common.xcontent.NamedXContentRegistry;
-import org.opensearch.env.Environment;
-import org.opensearch.indices.recovery.RecoverySettings;
-import org.opensearch.plugins.Plugin;
-import org.opensearch.plugins.RepositoryPlugin;
-import org.opensearch.repositories.Repository;
-
+@SuppressWarnings("removal")
 public final class HdfsPlugin extends Plugin implements RepositoryPlugin {
 
     // initialize some problematic classes with elevated privileges

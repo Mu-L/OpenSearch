@@ -33,15 +33,16 @@
 package org.opensearch.search.builder;
 
 import org.opensearch.common.Nullable;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.io.stream.Writeable;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.unit.TimeValue;
-import org.opensearch.common.xcontent.ObjectParser;
-import org.opensearch.common.xcontent.ToXContentObject;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.xcontent.ObjectParser;
+import org.opensearch.core.xcontent.ToXContentObject;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.util.Objects;
@@ -50,8 +51,9 @@ import java.util.Objects;
  * A search request with a point in time will execute using the reader contexts associated with that point time
  * instead of the latest reader contexts.
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "2.3.0")
 public final class PointInTimeBuilder implements Writeable, ToXContentObject {
     private static final ParseField ID_FIELD = new ParseField("id");
     private static final ParseField KEEP_ALIVE_FIELD = new ParseField("keep_alive");

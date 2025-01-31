@@ -31,7 +31,6 @@
 
 package org.opensearch.action.termvectors;
 
-import org.apache.lucene.tests.analysis.MockTokenizer;
 import org.apache.lucene.analysis.TokenFilter;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.payloads.FloatEncoder;
@@ -45,10 +44,11 @@ import org.apache.lucene.index.Fields;
 import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
+import org.apache.lucene.tests.analysis.MockTokenizer;
 import org.apache.lucene.util.BytesRef;
 import org.opensearch.OpenSearchException;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.index.analysis.PreConfiguredTokenizer;
 import org.opensearch.index.analysis.TokenFilterFactory;
 import org.opensearch.indices.analysis.AnalysisModule;

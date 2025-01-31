@@ -32,13 +32,14 @@
 package org.opensearch.index.engine;
 
 import org.apache.lucene.index.SegmentInfos;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.collect.MapBuilder;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.io.stream.Writeable;
 import org.opensearch.common.lucene.Lucene;
-import org.opensearch.common.xcontent.ToXContentFragment;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.xcontent.ToXContentFragment;
+import org.opensearch.core.xcontent.XContentBuilder;
 
 import java.io.IOException;
 import java.util.Base64;
@@ -47,8 +48,9 @@ import java.util.Map;
 /**
  * a class the returns dynamic information with respect to the last commit point of this shard
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public final class CommitStats implements Writeable, ToXContentFragment {
 
     private final Map<String, String> userData;

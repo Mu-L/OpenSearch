@@ -38,15 +38,15 @@ import org.opensearch.cluster.Diff;
 import org.opensearch.cluster.DiffableUtils;
 import org.opensearch.cluster.NamedDiff;
 import org.opensearch.cluster.metadata.Metadata;
-import org.opensearch.common.ParsingException;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.io.stream.Writeable;
 import org.opensearch.common.logging.DeprecationLogger;
-import org.opensearch.common.xcontent.ToXContentFragment;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
-import org.opensearch.common.xcontent.XContentParser.Token;
+import org.opensearch.core.common.ParsingException;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.xcontent.ToXContentFragment;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
+import org.opensearch.core.xcontent.XContentParser.Token;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -183,9 +183,9 @@ public final class ScriptMetadata implements Metadata.Custom, Writeable, ToXCont
 
     /**
      * This will parse XContent into {@link ScriptMetadata}.
-     *
+     * <p>
      * The following format will be parsed:
-     *
+     * <p>
      * {@code
      * {
      *     "<id>" : "<{@link StoredScriptSource#fromXContent(XContentParser, boolean)}>",
@@ -356,7 +356,7 @@ public final class ScriptMetadata implements Metadata.Custom, Writeable, ToXCont
 
     /**
      * This will write XContent from {@link ScriptMetadata}.  The following format will be written:
-     *
+     * <p>
      * {@code
      * {
      *     "<id>" : "<{@link StoredScriptSource#toXContent(XContentBuilder, Params)}>",

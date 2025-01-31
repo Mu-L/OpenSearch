@@ -32,6 +32,7 @@
 
 package org.opensearch.action.admin.cluster.health;
 
+import org.opensearch.Version;
 import org.opensearch.action.ActionRequestValidationException;
 import org.opensearch.action.IndicesRequest;
 import org.opensearch.action.support.ActiveShardCount;
@@ -39,22 +40,27 @@ import org.opensearch.action.support.IndicesOptions;
 import org.opensearch.action.support.clustermanager.ClusterManagerNodeReadRequest;
 import org.opensearch.cluster.health.ClusterHealthStatus;
 import org.opensearch.common.Priority;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.unit.TimeValue;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
 
 import java.io.IOException;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
+import static org.opensearch.action.ValidateActions.addValidationError;
+
 /**
  * Transport request for requesting cluster health
  *
- * @opensearch.internal
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public class ClusterHealthRequest extends ClusterManagerNodeReadRequest<ClusterHealthRequest> implements IndicesRequest.Replaceable {
 
     private String[] indices;
+    private String awarenessAttribute;
     private IndicesOptions indicesOptions = IndicesOptions.lenientExpandHidden();
     private TimeValue timeout = new TimeValue(30, TimeUnit.SECONDS);
     private ClusterHealthStatus waitForStatus;
@@ -63,11 +69,23 @@ public class ClusterHealthRequest extends ClusterManagerNodeReadRequest<ClusterH
     private ActiveShardCount waitForActiveShards = ActiveShardCount.NONE;
     private String waitForNodes = "";
     private Priority waitForEvents = null;
+    private boolean ensureNodeWeighedIn = false;
     /**
      * Only used by the high-level REST Client. Controls the details level of the health information returned.
      * The default value is 'cluster'.
      */
     private Level level = Level.CLUSTER;
+
+    /**
+     * This flag will be used by the TransportClusterHealthAction to decide if indices/shards info is required in the ClusterHealthResponse or not.
+     * When the flag is disabled - indices/shard info will be returned in ClusterHealthResponse regardless of the health level requested.
+     * When the flag is enabled - indices/shards info will be set according to health level requested.
+     *                  For Level.CLUSTER (or) Level.AWARENESS_ATTRIBUTES - information on indices/shards will NOT be returned to the transport client
+     *                  For Level.INDICES - information on indices will be returned to the transport client.
+     *                  For Level.SHARDS - information on indices and shards will be returned to the transport client
+     * By default, the flag is disabled.
+     */
+    private boolean applyLevelAtTransportLayer = false;
 
     public ClusterHealthRequest() {}
 
@@ -90,6 +108,16 @@ public class ClusterHealthRequest extends ClusterManagerNodeReadRequest<ClusterH
         }
         waitForNoInitializingShards = in.readBoolean();
         indicesOptions = IndicesOptions.readIndicesOptions(in);
+        if (in.getVersion().onOrAfter(Version.V_2_5_0)) {
+            awarenessAttribute = in.readOptionalString();
+            level = in.readEnum(Level.class);
+        }
+        if (in.getVersion().onOrAfter(Version.V_2_6_0)) {
+            ensureNodeWeighedIn = in.readBoolean();
+        }
+        if (in.getVersion().onOrAfter(Version.V_2_17_0)) {
+            applyLevelAtTransportLayer = in.readBoolean();
+        }
     }
 
     @Override
@@ -118,6 +146,16 @@ public class ClusterHealthRequest extends ClusterManagerNodeReadRequest<ClusterH
         }
         out.writeBoolean(waitForNoInitializingShards);
         indicesOptions.writeIndicesOptions(out);
+        if (out.getVersion().onOrAfter(Version.V_2_5_0)) {
+            out.writeOptionalString(awarenessAttribute);
+            out.writeEnum(level);
+        }
+        if (out.getVersion().onOrAfter(Version.V_2_6_0)) {
+            out.writeBoolean(ensureNodeWeighedIn);
+        }
+        if (out.getVersion().onOrAfter(Version.V_2_17_0)) {
+            out.writeBoolean(applyLevelAtTransportLayer);
+        }
     }
 
     @Override
@@ -269,6 +307,22 @@ public class ClusterHealthRequest extends ClusterManagerNodeReadRequest<ClusterH
         this.level = Objects.requireNonNull(level, "level must not be null");
     }
 
+    public void setLevel(String level) {
+        switch (level) {
+            case "indices":
+                level(ClusterHealthRequest.Level.INDICES);
+                break;
+            case "shards":
+                level(ClusterHealthRequest.Level.SHARDS);
+                break;
+            case "awareness_attributes":
+                level(ClusterHealthRequest.Level.AWARENESS_ATTRIBUTES);
+                break;
+            default:
+                level(ClusterHealthRequest.Level.CLUSTER);
+        }
+    }
+
     /**
      * Get the level of detail for the health information to be returned.
      * Only used by the high-level REST Client.
@@ -277,19 +331,60 @@ public class ClusterHealthRequest extends ClusterManagerNodeReadRequest<ClusterH
         return level;
     }
 
+    public ClusterHealthRequest setAwarenessAttribute(String awarenessAttribute) {
+        this.awarenessAttribute = awarenessAttribute;
+        return this;
+    }
+
+    public String getAwarenessAttribute() {
+        return awarenessAttribute;
+    }
+
+    public final ClusterHealthRequest ensureNodeWeighedIn(boolean ensureNodeWeighedIn) {
+        this.ensureNodeWeighedIn = ensureNodeWeighedIn;
+        return this;
+    }
+
+    /**
+     * For a given local request, checks if the local node is commissioned or not (default: false).
+     * @return <code>true</code> if local information is to be returned only when local node is also commissioned
+     * <code>false</code> to not check local node if commissioned or not for a local request
+     */
+    public final boolean ensureNodeWeighedIn() {
+        return ensureNodeWeighedIn;
+    }
+
+    public boolean isApplyLevelAtTransportLayer() {
+        return applyLevelAtTransportLayer;
+    }
+
+    public void setApplyLevelAtTransportLayer(boolean applyLevelAtTransportLayer) {
+        this.applyLevelAtTransportLayer = applyLevelAtTransportLayer;
+    }
+
     @Override
     public ActionRequestValidationException validate() {
+        if (level.equals(Level.AWARENESS_ATTRIBUTES) && indices.length > 0) {
+            return addValidationError("awareness_attribute is not a supported parameter with index health", null);
+        } else if (!level.equals(Level.AWARENESS_ATTRIBUTES) && awarenessAttribute != null) {
+            return addValidationError("level=awareness_attributes is required with awareness_attribute parameter", null);
+        }
+        if (ensureNodeWeighedIn && local == false) {
+            return addValidationError("not a local request to ensure local node commissioned or weighed in", null);
+        }
         return null;
     }
 
     /**
      * The level of the health request.
      *
-     * @opensearch.internal
+     * @opensearch.api
      */
+    @PublicApi(since = "1.0.0")
     public enum Level {
         CLUSTER,
         INDICES,
-        SHARDS
+        SHARDS,
+        AWARENESS_ATTRIBUTES
     }
 }

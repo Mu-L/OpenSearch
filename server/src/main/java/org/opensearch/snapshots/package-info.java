@@ -45,7 +45,7 @@
  * <ol>
  * <li>First the {@link org.opensearch.snapshots.SnapshotsService} determines the primary shards' assignments for all indices that are
  * being snapshotted and creates a {@code SnapshotsInProgress.Entry} with state {@code STARTED} and adds the map of
- * {@link org.opensearch.index.shard.ShardId} to {@link org.opensearch.cluster.SnapshotsInProgress.ShardSnapshotStatus} that tracks
+ * {@link org.opensearch.core.index.shard.ShardId} to {@link org.opensearch.cluster.SnapshotsInProgress.ShardSnapshotStatus} that tracks
  * the assignment of which node is to snapshot which shard. All shard snapshots are executed on the shard's primary node. Thus all shards
  * for which the primary node was found to have a healthy copy of the shard are marked as being in state {@code INIT} in this map. If the
  * primary for a shard is unassigned, it is marked as {@code MISSING} in this map. In case the primary is initializing at this point, it is
@@ -131,7 +131,7 @@
  *     snapshots, we load the {@link org.opensearch.snapshots.SnapshotInfo} for the source snapshot and check for shard snapshot
  *     failures of the relevant indices.</li>
  *     <li>Once all shard counts are known and the health of all source indices data has been verified, we populate the
- *     {@code SnapshotsInProgress.Entry#clones} map for the clone operation with the the relevant shard clone tasks.</li>
+ *     {@code SnapshotsInProgress.Entry#clones} map for the clone operation with the relevant shard clone tasks.</li>
  *     <li>After the clone tasks have been added to the {@code SnapshotsInProgress.Entry}, cluster-manager executes them on its snapshot thread-pool
  *     by invoking {@link org.opensearch.repositories.Repository#cloneShardSnapshot} for each shard that is to be cloned. Each completed
  *     shard snapshot triggers a call to the {@link org.opensearch.snapshots.SnapshotsService#SHARD_STATE_EXECUTOR} which updates the

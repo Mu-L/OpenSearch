@@ -46,8 +46,7 @@ import org.gradle.plugins.ide.eclipse.model.EclipseJdt
 import org.gradle.plugins.ide.eclipse.model.SourceFolder
 import org.gradle.api.Project;
 import org.gradle.process.ExecResult;
-import org.gradle.util.DistributionLocator
-import org.gradle.util.GradleVersion
+import org.opensearch.gradle.CheckCompatibilityTask
 
 import static org.opensearch.gradle.util.GradleUtils.maybeConfigure
 
@@ -55,8 +54,7 @@ plugins {
   id 'lifecycle-base'
   id 'opensearch.docker-support'
   id 'opensearch.global-build-info'
-  id "com.diffplug.spotless" version "6.11.0" apply false
-  id "org.gradle.test-retry" version "1.4.1" apply false
+  id "com.diffplug.spotless" version "6.25.0" apply false
   id "test-report-aggregation"
   id 'jacoco-report-aggregation'
 }
@@ -71,6 +69,13 @@ apply from: 'gradle/fips.gradle'
 apply from: 'gradle/run.gradle'
 apply from: 'gradle/missing-javadoc.gradle'
 apply from: 'gradle/code-coverage.gradle'
+
+// Disable unconditional publishing of build scans
+develocity {
+  buildScan {
+    publishing.onlyIf { false }
+  }
+}
 
 // common maven publishing configuration
 allprojects {
@@ -122,8 +127,8 @@ subprojects {
           name = 'Snapshots'
           url = 'https://aws.oss.sonatype.org/content/repositories/snapshots'
           credentials {
-            username "$System.env.SONATYPE_USERNAME"
-            password "$System.env.SONATYPE_PASSWORD"
+            username = "$System.env.SONATYPE_USERNAME"
+            password = "$System.env.SONATYPE_PASSWORD"
           }
         }
       }
@@ -157,14 +162,20 @@ Map<String, String> buildMetadataMap = buildMetadataValue.tokenize(';').collectE
   return [key, value]
 }
 
-    /**
-     * Using 'git' command line (if available), tries to fetch the commit date of the current revision
-     * @return commit date of the current revision or 0 if it is not available
-     */
+// See please https://docs.gradle.org/8.11/userguide/service_injection.html#execoperations
+interface InjectedExecOps {
+  @Inject ExecOperations getExecOps()
+}
+
+/**
+ * Using 'git' command line (if available), tries to fetch the commit date of the current revision
+ * @return commit date of the current revision or 0 if it is not available
+ */
 long gitRevisionDate = {
+  def execOps = project.objects.newInstance(InjectedExecOps)
   // Try to get last commit date as Unix timestamp
   try (ByteArrayOutputStream stdout = new ByteArrayOutputStream()) {
-     ExecResult result = project.exec(spec -> {
+     ExecResult result = execOps.execOps.exec(spec -> {
         spec.setIgnoreExitValue(true);
         spec.setStandardOutput(stdout);
         spec.commandLine("git", "log", "-1", "--format=%ct");
@@ -227,8 +238,16 @@ tasks.register("verifyVersions") {
  */
 
 boolean bwc_tests_enabled = true
+
 /* place an issue link here when committing bwc changes */
-final String bwc_tests_disabled_issue = ""
+String bwc_tests_disabled_issue = ""
+
+/* there's no existing MacOS release, therefore disable bcw tests */
+if (Os.isFamily(Os.FAMILY_MAC)) {
+  bwc_tests_enabled = false
+  bwc_tests_disabled_issue = "https://github.com/opensearch-project/OpenSearch/issues/4173"
+}
+
 if (bwc_tests_enabled == false) {
   if (bwc_tests_disabled_issue.isEmpty()) {
     throw new GradleException("bwc_tests_disabled_issue must be set when bwc_tests_enabled == false")
@@ -315,8 +334,12 @@ allprojects {
     // see https://discuss.gradle.org/t/add-custom-javadoc-option-that-does-not-take-an-argument/5959
     javadoc.options.encoding = 'UTF8'
     javadoc.options.addStringOption('Xdoclint:all,-missing', '-quiet')
+    boolean failOnJavadocWarning = project.ext.has('failOnJavadocWarning') ? project.ext.get('failOnJavadocWarning') : true
+    if (failOnJavadocWarning) {
+      javadoc.options.addStringOption('Xwerror', '-quiet')
+    }
     javadoc.options.tags = ["opensearch.internal", "opensearch.api", "opensearch.experimental"]
-    javadoc.options.addStringOption("-release", targetCompatibility.majorVersion)
+    javadoc.options.addStringOption("-release", java.targetCompatibility.majorVersion)
   }
 
   // support for reproducible builds
@@ -345,7 +368,7 @@ allprojects {
         if ((dep instanceof ProjectDependency) == false) {
           return
         }
-        Project upstreamProject = dep.dependencyProject
+        Project upstreamProject = project.project(dep.path)
         if (upstreamProject == null) {
           return
         }
@@ -364,7 +387,7 @@ allprojects {
         } else {
           // Link to non-shadowed dependant projects
           project.javadoc.dependsOn "${upstreamProject.path}:javadoc"
-          String externalLinkName = upstreamProject.archivesBaseName
+          String externalLinkName = upstreamProject.base.archivesName
           String artifactPath = dep.group.replaceAll('\\.', '/') + '/' + externalLinkName.replaceAll('\\.', '/') + '/' + dep.version
           String projectRelativePath = project.relativePath(upstreamProject.buildDir)
           project.javadoc.options.linksOffline artifactsHost + "/javadoc/" + artifactPath, "${projectRelativePath}/docs/javadoc/"
@@ -397,7 +420,7 @@ allprojects {
 gradle.projectsEvaluated {
   allprojects {
     project.tasks.withType(JavaForkOptions) {
-      maxHeapSize project.property('options.forkOptions.memoryMaximumSize')
+      maxHeapSize = project.property('options.forkOptions.memoryMaximumSize')
     }
 
     if (project.path == ':test:framework') {
@@ -413,12 +436,15 @@ gradle.projectsEvaluated {
         if (BuildParams.runtimeJavaVersion > JavaVersion.VERSION_17) {
           task.jvmArgs += ["-Djava.security.manager=allow"]
         }
+        if (BuildParams.runtimeJavaVersion >= JavaVersion.VERSION_20) {
+          task.jvmArgs += ["--add-modules=jdk.incubator.vector"]
+        }
       }
     }
 
     configurations.matching { it.canBeResolved }.all { Configuration configuration ->
       dependencies.matching { it instanceof ProjectDependency }.all { ProjectDependency dep ->
-        Project upstreamProject = dep.dependencyProject
+        Project upstreamProject = project.project(dep.path)
         if (upstreamProject != null) {
           if (project.path == upstreamProject.path) {
             // TODO: distribution integ tests depend on themselves (!), fix that
@@ -441,21 +467,96 @@ gradle.projectsEvaluated {
       testReportAggregation it
     }
     subprojects.findAll { it.pluginManager.hasPlugin('jacoco') }.forEach {
-     jacocoAggregation it
+      jacocoAggregation it
     }
   }
 }
 
 // test retry configuration
 subprojects {
-  apply plugin: "org.gradle.test-retry"
   tasks.withType(Test).configureEach {
-    retry {
+    develocity.testRetry {
       if (BuildParams.isCi()) {
         maxRetries = 3
         maxFailures = 10
       }
       failOnPassedAfterRetry = false
+      filter {
+        includeClasses.add("org.opensearch.action.admin.cluster.node.tasks.ResourceAwareTasksTests")
+        includeClasses.add("org.opensearch.action.admin.cluster.tasks.PendingTasksBlocksIT")
+        includeClasses.add("org.opensearch.action.admin.indices.create.CreateIndexIT")
+        includeClasses.add("org.opensearch.action.admin.indices.create.ShrinkIndexIT")
+        includeClasses.add("org.opensearch.aliases.IndexAliasesIT")
+        includeClasses.add("org.opensearch.backwards.MixedClusterClientYamlTestSuiteIT")
+        includeClasses.add("org.opensearch.blocks.SimpleBlocksIT")
+        includeClasses.add("org.opensearch.client.PitIT")
+        includeClasses.add("org.opensearch.client.ReindexIT")
+        includeClasses.add("org.opensearch.cluster.ClusterHealthIT")
+        includeClasses.add("org.opensearch.cluster.allocation.AwarenessAllocationIT")
+        includeClasses.add("org.opensearch.cluster.allocation.ClusterRerouteIT")
+        includeClasses.add("org.opensearch.cluster.coordination.AwarenessAttributeDecommissionIT")
+        includeClasses.add("org.opensearch.cluster.metadata.IndexGraveyardTests")
+        includeClasses.add("org.opensearch.cluster.routing.MovePrimaryFirstTests")
+        includeClasses.add("org.opensearch.cluster.routing.allocation.decider.DiskThresholdDeciderIT")
+        includeClasses.add("org.opensearch.common.util.concurrent.QueueResizableOpenSearchThreadPoolExecutorTests")
+        includeClasses.add("org.opensearch.gateway.RecoveryFromGatewayIT")
+        includeClasses.add("org.opensearch.gateway.ReplicaShardAllocatorIT")
+        includeClasses.add("org.opensearch.http.SearchRestCancellationIT")
+        includeClasses.add("org.opensearch.http.netty4.Netty4HttpServerTransportTests")
+        includeClasses.add("org.opensearch.index.IndexServiceTests")
+        includeClasses.add("org.opensearch.index.IndexSettingsTests")
+        includeClasses.add("org.opensearch.index.SegmentReplicationPressureIT")
+        includeClasses.add("org.opensearch.index.ShardIndexingPressureIT")
+        includeClasses.add("org.opensearch.index.ShardIndexingPressureSettingsIT")
+        includeClasses.add("org.opensearch.index.reindex.BulkByScrollResponseTests")
+        includeClasses.add("org.opensearch.index.reindex.DeleteByQueryBasicTests")
+        includeClasses.add("org.opensearch.index.reindex.UpdateByQueryBasicTests")
+        includeClasses.add("org.opensearch.index.shard.IndexShardIT")
+        includeClasses.add("org.opensearch.index.shard.RemoteIndexShardTests")
+        includeClasses.add("org.opensearch.index.shard.RemoteStoreRefreshListenerTests")
+        includeClasses.add("org.opensearch.index.translog.RemoteFSTranslogTests")
+        includeClasses.add("org.opensearch.indices.DateMathIndexExpressionsIntegrationIT")
+        includeClasses.add("org.opensearch.indices.replication.RemoteStoreReplicationSourceTests")
+        includeClasses.add("org.opensearch.indices.replication.SegmentReplicationAllocationIT")
+        includeClasses.add("org.opensearch.indices.replication.SegmentReplicationIT")
+        includeClasses.add("org.opensearch.indices.replication.SegmentReplicationRelocationIT")
+        includeClasses.add("org.opensearch.indices.replication.SegmentReplicationTargetServiceTests")
+        includeClasses.add("org.opensearch.indices.state.CloseWhileRelocatingShardsIT")
+        includeClasses.add("org.opensearch.monitor.fs.FsHealthServiceTests")
+        includeClasses.add("org.opensearch.recovery.ReplicationCollectionTests")
+        includeClasses.add("org.opensearch.remotestore.CreateRemoteIndexClusterDefaultDocRep")
+        includeClasses.add("org.opensearch.remotestore.CreateRemoteIndexIT")
+        includeClasses.add("org.opensearch.remotestore.CreateRemoteIndexTranslogDisabledIT")
+        includeClasses.add("org.opensearch.remotestore.RemoteStoreBackpressureIT")
+        includeClasses.add("org.opensearch.remotestore.RemoteStoreIT")
+        includeClasses.add("org.opensearch.remotestore.RemoteStoreRefreshListenerIT")
+        includeClasses.add("org.opensearch.remotestore.RemoteStoreStatsIT")
+        includeClasses.add("org.opensearch.remotestore.SegmentReplicationRemoteStoreIT")
+        includeClasses.add("org.opensearch.remotestore.SegmentReplicationUsingRemoteStoreIT")
+        includeClasses.add("org.opensearch.remotestore.multipart.RemoteStoreMultipartIT")
+        includeClasses.add("org.opensearch.repositories.azure.AzureBlobContainerRetriesTests")
+        includeClasses.add("org.opensearch.repositories.azure.AzureBlobStoreRepositoryTests")
+        includeClasses.add("org.opensearch.repositories.gcs.GoogleCloudStorageBlobContainerRetriesTests")
+        includeClasses.add("org.opensearch.repositories.gcs.GoogleCloudStorageBlobStoreRepositoryTests")
+        includeClasses.add("org.opensearch.repositories.s3.S3BlobStoreRepositoryTests")
+        includeClasses.add("org.opensearch.search.ConcurrentSegmentSearchTimeoutIT")
+        includeClasses.add("org.opensearch.search.SearchTimeoutIT")
+        includeClasses.add("org.opensearch.search.SearchWeightedRoutingIT")
+        includeClasses.add("org.opensearch.search.aggregations.bucket.DoubleTermsIT")
+        includeClasses.add("org.opensearch.search.aggregations.bucket.terms.StringTermsIT")
+        includeClasses.add("org.opensearch.search.aggregations.metrics.CardinalityIT")
+        includeClasses.add("org.opensearch.search.backpressure.SearchBackpressureIT")
+        includeClasses.add("org.opensearch.search.basic.SearchWithRandomIOExceptionsIT")
+        includeClasses.add("org.opensearch.search.pit.DeletePitMultiNodeIT")
+        includeClasses.add("org.opensearch.smoketest.SmokeTestMultiNodeClientYamlTestSuiteIT")
+        includeClasses.add("org.opensearch.snapshots.CloneSnapshotIT")
+        includeClasses.add("org.opensearch.snapshots.DedicatedClusterSnapshotRestoreIT")
+        includeClasses.add("org.opensearch.snapshots.RestoreSnapshotIT")
+        includeClasses.add("org.opensearch.snapshots.SnapshotStatusApisIT")
+        includeClasses.add("org.opensearch.test.rest.ClientYamlTestSuiteIT")
+        includeClasses.add("org.opensearch.upgrade.DetectEsInstallationTaskTests")
+        includeClasses.add("org.opensearch.cluster.MinimumClusterManagerNodesIT")
+      }
     }
   }
 }
@@ -529,16 +630,12 @@ allprojects {
 wrapper {
   distributionType = 'ALL'
   doLast {
-    final DistributionLocator locator = new DistributionLocator()
-    final GradleVersion version = GradleVersion.version(wrapper.gradleVersion)
-    final URI distributionUri = locator.getDistributionFor(version, wrapper.distributionType.name().toLowerCase(Locale.ENGLISH))
-    final URI sha256Uri = new URI(distributionUri.toString() + ".sha256")
-    final String sha256Sum = new String(sha256Uri.toURL().bytes)
-    wrapper.getPropertiesFile() << "distributionSha256Sum=${sha256Sum}\n"
+    def sha256Sum = new String(new URL(getDistributionUrl() + ".sha256").bytes)
+    propertiesFile << "distributionSha256Sum=${sha256Sum}\n"
     println "Added checksum to wrapper properties"
     // Update build-tools to reflect the Gradle upgrade
     // TODO: we can remove this once we have tests to make sure older versions work.
-    project(':build-tools').file('src/main/resources/minimumGradleVersion').text = gradleVersion
+    project(':build-tools').file('src/main/resources/minimumGradleVersion').text = gradleVersion + "\n"
     println "Updated minimum Gradle Version"
   }
 }
@@ -636,4 +733,16 @@ tasks.withType(TestTaskReports).configureEach {
 
 tasks.named(JavaBasePlugin.CHECK_TASK_NAME) {
   dependsOn tasks.named('testAggregateTestReport', TestReport)
+}
+
+tasks.register('checkCompatibility', CheckCompatibilityTask) {
+  description = 'Checks the compatibility with child components'
+}
+
+allprojects { project ->
+  project.afterEvaluate {
+    if (project.tasks.findByName('publishToMavenLocal')) {
+      checkCompatibility.dependsOn(project.tasks.publishToMavenLocal)
+    }
+  }
 }

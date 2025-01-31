@@ -32,16 +32,18 @@
 package org.opensearch.index.query;
 
 import org.opensearch.common.Nullable;
-import org.opensearch.common.ParseField;
-import org.opensearch.common.ParsingException;
-import org.opensearch.common.Strings;
-import org.opensearch.common.io.stream.StreamInput;
-import org.opensearch.common.io.stream.StreamOutput;
-import org.opensearch.common.io.stream.Writeable;
-import org.opensearch.common.xcontent.ObjectParser;
-import org.opensearch.common.xcontent.ToXContentObject;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.common.annotation.PublicApi;
+import org.opensearch.core.ParseField;
+import org.opensearch.core.common.ParsingException;
+import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.ObjectParser;
+import org.opensearch.core.xcontent.ToXContentObject;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.script.Script;
 import org.opensearch.search.builder.SearchSourceBuilder;
 import org.opensearch.search.builder.SearchSourceBuilder.ScriptField;
@@ -61,11 +63,14 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
-import static org.opensearch.common.xcontent.XContentParser.Token.END_OBJECT;
+import static org.opensearch.core.xcontent.XContentParser.Token.END_OBJECT;
 
 /**
  * Query builder for inner hits
+ *
+ * @opensearch.api
  */
+@PublicApi(since = "1.0.0")
 public final class InnerHitBuilder implements Writeable, ToXContentObject {
 
     public static final ParseField NAME_FIELD = new ParseField("name");
@@ -597,6 +602,6 @@ public final class InnerHitBuilder implements Writeable, ToXContentObject {
 
     @Override
     public String toString() {
-        return Strings.toString(this, true, true);
+        return Strings.toString(MediaTypeRegistry.JSON, this, true, true);
     }
 }

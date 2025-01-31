@@ -32,9 +32,9 @@
 
 package org.opensearch.common.geo;
 
-import org.opensearch.common.xcontent.ToXContent;
-import org.opensearch.common.xcontent.XContentBuilder;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.xcontent.ToXContent;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.text.ParseException;
@@ -63,7 +63,7 @@ public interface GeometryFormat<ParsedFormat> {
 
     /**
      * Serializes the geometry into a standard Java object.
-     *
+     * <p>
      * For example, the GeoJson format returns the geometry as a map, while WKT returns a string.
      */
     Object toXContentAsObject(ParsedFormat geometry);

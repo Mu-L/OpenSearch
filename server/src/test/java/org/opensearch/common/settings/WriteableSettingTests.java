@@ -8,24 +8,21 @@
 
 package org.opensearch.common.settings;
 
-import org.junit.Before;
 import org.opensearch.Version;
-import org.opensearch.common.SuppressForbidden;
-import org.opensearch.common.bytes.BytesReference;
-import org.opensearch.common.io.stream.BytesStreamInput;
 import org.opensearch.common.io.stream.BytesStreamOutput;
-import org.opensearch.common.unit.ByteSizeUnit;
-import org.opensearch.common.unit.ByteSizeValue;
 import org.opensearch.common.unit.TimeValue;
+import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.common.io.stream.BytesStreamInput;
+import org.opensearch.core.common.unit.ByteSizeUnit;
+import org.opensearch.core.common.unit.ByteSizeValue;
 import org.opensearch.test.OpenSearchTestCase;
+import org.junit.Before;
 
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Function;
 
 import static org.opensearch.common.settings.Setting.Property;
 import static org.opensearch.common.settings.WriteableSetting.SettingType;
@@ -460,23 +457,5 @@ public class WriteableSettingTests extends OpenSearchTestCase {
                 assertTrue(props.contains(Property.Dynamic));
             }
         }
-    }
-
-    @SuppressForbidden(reason = "The only way to test these is via reflection")
-    public void testExceptionHandling() throws NoSuchFieldException, SecurityException, IllegalArgumentException, IllegalAccessException {
-        // abuse reflection to change default value, no way to do this with given Setting class
-        Setting<String> setting = Setting.simpleString("");
-        Field dv = setting.getClass().getDeclaredField("defaultValue");
-        dv.setAccessible(true);
-        Field p = setting.getClass().getDeclaredField("parser");
-        p.setAccessible(true);
-
-        // test default value type not in enum
-        Function<Settings, String> dvfi = s -> "";
-        dv.set(setting, dvfi);
-        Function<String, WriteableSettingTests> pfi = s -> new WriteableSettingTests();
-        p.set(setting, pfi);
-        IllegalArgumentException iae = expectThrows(IllegalArgumentException.class, () -> new WriteableSetting(setting));
-        assertTrue(iae.getMessage().contains("generic type: WriteableSettingTests"));
     }
 }

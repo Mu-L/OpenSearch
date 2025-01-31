@@ -35,12 +35,19 @@ package org.opensearch.indices.settings;
 import org.opensearch.action.admin.cluster.health.ClusterHealthResponse;
 import org.opensearch.action.admin.indices.settings.get.GetSettingsResponse;
 import org.opensearch.cluster.ClusterState;
+import org.opensearch.cluster.applicationtemplates.ClusterStateSystemTemplateLoader;
+import org.opensearch.cluster.applicationtemplates.SystemTemplate;
+import org.opensearch.cluster.applicationtemplates.SystemTemplateMetadata;
+import org.opensearch.cluster.applicationtemplates.TemplateRepositoryMetadata;
+import org.opensearch.cluster.metadata.Context;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.Priority;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Settings;
+import org.opensearch.common.settings.SettingsException;
 import org.opensearch.common.unit.TimeValue;
+import org.opensearch.core.common.bytes.BytesReference;
 import org.opensearch.index.IndexModule;
 import org.opensearch.index.IndexService;
 import org.opensearch.index.VersionType;
@@ -50,10 +57,14 @@ import org.opensearch.plugins.Plugin;
 import org.opensearch.test.OpenSearchIntegTestCase;
 import org.opensearch.threadpool.ThreadPool;
 
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 
 import static org.opensearch.cluster.metadata.IndexMetadata.SETTING_BLOCKS_METADATA;
 import static org.opensearch.cluster.metadata.IndexMetadata.SETTING_BLOCKS_READ;
@@ -98,6 +109,58 @@ public class UpdateSettingsIT extends OpenSearchIntegTestCase {
         assertNotEquals(indexMetadata.getSettings().get("index.dummy"), "invalid dynamic value");
     }
 
+    public void testDynamicUpdateWithContextSettingOverlap() throws IOException {
+        String templateContent = "{\n"
+            + "  \"template\": {\n"
+            + "    \"settings\": {\n"
+            + "      \"index.merge.policy\": \"log_byte_size\"\n"
+            + "    }\n"
+            + "  },\n"
+            + "  \"_meta\": {\n"
+            + "    \"_type\": \"@abc_template\",\n"
+            + "    \"_version\": 1\n"
+            + "  },\n"
+            + "  \"version\": 1\n"
+            + "}\n";
+
+        ClusterStateSystemTemplateLoader loader = new ClusterStateSystemTemplateLoader(
+            internalCluster().clusterManagerClient(),
+            () -> internalCluster().getInstance(ClusterService.class).state()
+        );
+        loader.loadTemplate(
+            new SystemTemplate(
+                BytesReference.fromByteBuffer(ByteBuffer.wrap(templateContent.getBytes(StandardCharsets.UTF_8))),
+                SystemTemplateMetadata.fromComponentTemplateInfo("testcontext", 1L),
+                new TemplateRepositoryMetadata(UUID.randomUUID().toString(), 1L)
+            )
+        );
+
+        createIndex("test", new Context("testcontext"));
+
+        IllegalArgumentException validationException = expectThrows(
+            IllegalArgumentException.class,
+            () -> client().admin()
+                .indices()
+                .prepareUpdateSettings("test")
+                .setSettings(Settings.builder().put("index.merge.policy", "tiered"))
+                .execute()
+                .actionGet()
+        );
+        assertTrue(
+            validationException.getMessage()
+                .contains("Cannot apply context template as user provide settings have overlap with the included context template")
+        );
+
+        assertAcked(
+            client().admin()
+                .indices()
+                .prepareUpdateSettings("test")
+                .setSettings(Settings.builder().put("index.refresh_interval", "60s"))
+                .execute()
+                .actionGet()
+        );
+    }
+
     @Override
     protected Collection<Class<? extends Plugin>> nodePlugins() {
         return Arrays.asList(DummySettingPlugin.class, FinalSettingPlugin.class);
@@ -136,11 +199,9 @@ public class UpdateSettingsIT extends OpenSearchIntegTestCase {
 
         @Override
         public void onIndexModule(IndexModule indexModule) {
-            indexModule.addSettingsUpdateConsumer(
-                DUMMY_SETTING,
-                (s) -> {},
-                (s) -> { if (s.equals("boom")) throw new IllegalArgumentException("this setting goes boom"); }
-            );
+            indexModule.addSettingsUpdateConsumer(DUMMY_SETTING, (s) -> {}, (s) -> {
+                if (s.equals("boom")) throw new IllegalArgumentException("this setting goes boom");
+            });
         }
 
         @Override
@@ -174,28 +235,28 @@ public class UpdateSettingsIT extends OpenSearchIntegTestCase {
     }
 
     public void testUpdateDependentClusterSettings() {
-        IllegalArgumentException iae = expectThrows(
-            IllegalArgumentException.class,
+        SettingsException e = expectThrows(
+            SettingsException.class,
             () -> client().admin()
                 .cluster()
                 .prepareUpdateSettings()
                 .setPersistentSettings(Settings.builder().put("cluster.acc.test.pw", "asdf"))
                 .get()
         );
-        assertEquals("missing required setting [cluster.acc.test.user] for setting [cluster.acc.test.pw]", iae.getMessage());
+        assertEquals("missing required setting [cluster.acc.test.user] for setting [cluster.acc.test.pw]", e.getMessage());
 
-        iae = expectThrows(
-            IllegalArgumentException.class,
+        e = expectThrows(
+            SettingsException.class,
             () -> client().admin()
                 .cluster()
                 .prepareUpdateSettings()
                 .setTransientSettings(Settings.builder().put("cluster.acc.test.pw", "asdf"))
                 .get()
         );
-        assertEquals("missing required setting [cluster.acc.test.user] for setting [cluster.acc.test.pw]", iae.getMessage());
+        assertEquals("missing required setting [cluster.acc.test.user] for setting [cluster.acc.test.pw]", e.getMessage());
 
-        iae = expectThrows(
-            IllegalArgumentException.class,
+        e = expectThrows(
+            SettingsException.class,
             () -> client().admin()
                 .cluster()
                 .prepareUpdateSettings()
@@ -203,7 +264,7 @@ public class UpdateSettingsIT extends OpenSearchIntegTestCase {
                 .setPersistentSettings(Settings.builder().put("cluster.acc.test.user", "asdf"))
                 .get()
         );
-        assertEquals("missing required setting [cluster.acc.test.user] for setting [cluster.acc.test.pw]", iae.getMessage());
+        assertEquals("missing required setting [cluster.acc.test.user] for setting [cluster.acc.test.pw]", e.getMessage());
 
         if (randomBoolean()) {
             client().admin()
@@ -211,15 +272,15 @@ public class UpdateSettingsIT extends OpenSearchIntegTestCase {
                 .prepareUpdateSettings()
                 .setTransientSettings(Settings.builder().put("cluster.acc.test.pw", "asdf").put("cluster.acc.test.user", "asdf"))
                 .get();
-            iae = expectThrows(
-                IllegalArgumentException.class,
+            e = expectThrows(
+                SettingsException.class,
                 () -> client().admin()
                     .cluster()
                     .prepareUpdateSettings()
                     .setTransientSettings(Settings.builder().putNull("cluster.acc.test.user"))
                     .get()
             );
-            assertEquals("missing required setting [cluster.acc.test.user] for setting [cluster.acc.test.pw]", iae.getMessage());
+            assertEquals("missing required setting [cluster.acc.test.user] for setting [cluster.acc.test.pw]", e.getMessage());
             client().admin()
                 .cluster()
                 .prepareUpdateSettings()
@@ -232,15 +293,15 @@ public class UpdateSettingsIT extends OpenSearchIntegTestCase {
                 .setPersistentSettings(Settings.builder().put("cluster.acc.test.pw", "asdf").put("cluster.acc.test.user", "asdf"))
                 .get();
 
-            iae = expectThrows(
-                IllegalArgumentException.class,
+            e = expectThrows(
+                SettingsException.class,
                 () -> client().admin()
                     .cluster()
                     .prepareUpdateSettings()
                     .setPersistentSettings(Settings.builder().putNull("cluster.acc.test.user"))
                     .get()
             );
-            assertEquals("missing required setting [cluster.acc.test.user] for setting [cluster.acc.test.pw]", iae.getMessage());
+            assertEquals("missing required setting [cluster.acc.test.user] for setting [cluster.acc.test.pw]", e.getMessage());
 
             client().admin()
                 .cluster()
@@ -252,11 +313,11 @@ public class UpdateSettingsIT extends OpenSearchIntegTestCase {
     }
 
     public void testUpdateDependentIndexSettings() {
-        IllegalArgumentException iae = expectThrows(
-            IllegalArgumentException.class,
+        SettingsException e = expectThrows(
+            SettingsException.class,
             () -> prepareCreate("test", Settings.builder().put("index.acc.test.pw", "asdf")).get()
         );
-        assertEquals("missing required setting [index.acc.test.user] for setting [index.acc.test.pw]", iae.getMessage());
+        assertEquals("missing required setting [index.acc.test.user] for setting [index.acc.test.pw]", e.getMessage());
 
         createIndex("test");
         for (int i = 0; i < 2; i++) {
@@ -265,8 +326,8 @@ public class UpdateSettingsIT extends OpenSearchIntegTestCase {
                 client().admin().indices().prepareClose("test").get();
             }
 
-            iae = expectThrows(
-                IllegalArgumentException.class,
+            e = expectThrows(
+                SettingsException.class,
                 () -> client().admin()
                     .indices()
                     .prepareUpdateSettings("test")
@@ -274,7 +335,7 @@ public class UpdateSettingsIT extends OpenSearchIntegTestCase {
                     .execute()
                     .actionGet()
             );
-            assertEquals("missing required setting [index.acc.test.user] for setting [index.acc.test.pw]", iae.getMessage());
+            assertEquals("missing required setting [index.acc.test.user] for setting [index.acc.test.pw]", e.getMessage());
 
             // user has no dependency
             client().admin()
@@ -293,8 +354,8 @@ public class UpdateSettingsIT extends OpenSearchIntegTestCase {
                 .actionGet();
 
             // now try to remove it and make sure it fails
-            iae = expectThrows(
-                IllegalArgumentException.class,
+            e = expectThrows(
+                SettingsException.class,
                 () -> client().admin()
                     .indices()
                     .prepareUpdateSettings("test")
@@ -302,7 +363,7 @@ public class UpdateSettingsIT extends OpenSearchIntegTestCase {
                     .execute()
                     .actionGet()
             );
-            assertEquals("missing required setting [index.acc.test.user] for setting [index.acc.test.pw]", iae.getMessage());
+            assertEquals("missing required setting [index.acc.test.user] for setting [index.acc.test.pw]", e.getMessage());
 
             // now we are consistent
             client().admin()
@@ -480,8 +541,8 @@ public class UpdateSettingsIT extends OpenSearchIntegTestCase {
         assertThat(indexMetadata.getSettings().get("index.refresh_interval"), equalTo("1s"));
         assertThat(indexMetadata.getSettings().get("index.fielddata.cache"), equalTo("none"));
 
-        IllegalArgumentException ex = expectThrows(
-            IllegalArgumentException.class,
+        SettingsException ex = expectThrows(
+            SettingsException.class,
             () -> client().admin()
                 .indices()
                 .prepareUpdateSettings("test")
@@ -832,6 +893,69 @@ public class UpdateSettingsIT extends OpenSearchIntegTestCase {
         // we removed the setting but it should still have an explicit value since index metadata requires this
         assertTrue(IndexMetadata.INDEX_NUMBER_OF_REPLICAS_SETTING.exists(response.getIndexToSettings().get("test")));
         assertThat(IndexMetadata.INDEX_NUMBER_OF_REPLICAS_SETTING.get(response.getIndexToSettings().get("test")), equalTo(1));
+    }
+
+    public void testNullReplicaUpdate() {
+        internalCluster().ensureAtLeastNumDataNodes(2);
+
+        // cluster setting
+        String defaultNumberOfReplica = "3";
+        assertAcked(
+            client().admin()
+                .cluster()
+                .prepareUpdateSettings()
+                .setPersistentSettings(Settings.builder().put("cluster.default_number_of_replicas", defaultNumberOfReplica))
+                .get()
+        );
+        // create index with number of replicas will ignore default value
+        assertAcked(
+            client().admin()
+                .indices()
+                .prepareCreate("test")
+                .setSettings(Settings.builder().put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, "2"))
+        );
+
+        String numberOfReplicas = client().admin()
+            .indices()
+            .prepareGetSettings("test")
+            .get()
+            .getSetting("test", IndexMetadata.SETTING_NUMBER_OF_REPLICAS);
+        assertEquals("2", numberOfReplicas);
+        // update setting with null replica will use cluster setting of replica number
+        assertAcked(
+            client().admin()
+                .indices()
+                .prepareUpdateSettings("test")
+                .setSettings(Settings.builder().putNull(IndexMetadata.SETTING_NUMBER_OF_REPLICAS))
+        );
+
+        numberOfReplicas = client().admin()
+            .indices()
+            .prepareGetSettings("test")
+            .get()
+            .getSetting("test", IndexMetadata.SETTING_NUMBER_OF_REPLICAS);
+        assertEquals(defaultNumberOfReplica, numberOfReplicas);
+
+        // Clean up cluster setting, then update setting with null replica should pick up default value of 1
+        assertAcked(
+            client().admin()
+                .cluster()
+                .prepareUpdateSettings()
+                .setPersistentSettings(Settings.builder().putNull("cluster.default_number_of_replicas"))
+        );
+        assertAcked(
+            client().admin()
+                .indices()
+                .prepareUpdateSettings("test")
+                .setSettings(Settings.builder().putNull(IndexMetadata.SETTING_NUMBER_OF_REPLICAS))
+        );
+
+        numberOfReplicas = client().admin()
+            .indices()
+            .prepareGetSettings("test")
+            .get()
+            .getSetting("test", IndexMetadata.SETTING_NUMBER_OF_REPLICAS);
+        assertEquals("1", numberOfReplicas);
     }
 
     public void testNoopUpdate() {

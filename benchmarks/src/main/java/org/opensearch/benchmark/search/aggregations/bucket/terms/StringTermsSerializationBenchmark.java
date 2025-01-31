@@ -34,12 +34,13 @@ package org.opensearch.benchmark.search.aggregations.bucket.terms;
 
 import org.apache.lucene.util.BytesRef;
 import org.opensearch.common.io.stream.DelayableWriteable;
-import org.opensearch.common.io.stream.NamedWriteableRegistry;
+import org.opensearch.core.common.io.stream.NamedWriteableRegistry;
 import org.opensearch.search.DocValueFormat;
 import org.opensearch.search.aggregations.BucketOrder;
 import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.InternalAggregations;
 import org.opensearch.search.aggregations.bucket.terms.StringTerms;
+import org.opensearch.search.aggregations.bucket.terms.TermsAggregator;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
@@ -64,9 +65,7 @@ import java.util.concurrent.TimeUnit;
 @State(Scope.Benchmark)
 public class StringTermsSerializationBenchmark {
     private static final NamedWriteableRegistry REGISTRY = new NamedWriteableRegistry(
-        org.opensearch.common.collect.List.of(
-            new NamedWriteableRegistry.Entry(InternalAggregation.class, StringTerms.NAME, StringTerms::new)
-        )
+        List.of(new NamedWriteableRegistry.Entry(InternalAggregation.class, StringTerms.NAME, StringTerms::new))
     );
     @Param(value = { "1000" })
     private int buckets;
@@ -75,30 +74,27 @@ public class StringTermsSerializationBenchmark {
 
     @Setup
     public void initResults() {
-        results = DelayableWriteable.referencing(InternalAggregations.from(org.opensearch.common.collect.List.of(newTerms(true))));
+        results = DelayableWriteable.referencing(InternalAggregations.from(List.of(newTerms(true))));
     }
 
     private StringTerms newTerms(boolean withNested) {
         List<StringTerms.Bucket> resultBuckets = new ArrayList<>(buckets);
         for (int i = 0; i < buckets; i++) {
-            InternalAggregations inner = withNested
-                ? InternalAggregations.from(org.opensearch.common.collect.List.of(newTerms(false)))
-                : InternalAggregations.EMPTY;
+            InternalAggregations inner = withNested ? InternalAggregations.from(List.of(newTerms(false))) : InternalAggregations.EMPTY;
             resultBuckets.add(new StringTerms.Bucket(new BytesRef("test" + i), i, inner, false, 0, DocValueFormat.RAW));
         }
         return new StringTerms(
             "test",
             BucketOrder.key(true),
             BucketOrder.key(true),
-            buckets,
-            1,
             null,
             DocValueFormat.RAW,
             buckets,
             false,
             100000,
             resultBuckets,
-            0
+            0,
+            new TermsAggregator.BucketCountThresholds(1, 0, buckets, buckets)
         );
     }
 

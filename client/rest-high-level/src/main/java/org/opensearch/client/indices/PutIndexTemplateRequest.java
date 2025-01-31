@@ -39,19 +39,21 @@ import org.opensearch.action.admin.indices.alias.Alias;
 import org.opensearch.action.support.IndicesOptions;
 import org.opensearch.action.support.clustermanager.ClusterManagerNodeRequest;
 import org.opensearch.common.Nullable;
-import org.opensearch.common.bytes.BytesArray;
-import org.opensearch.common.bytes.BytesReference;
 import org.opensearch.common.settings.Settings;
-import org.opensearch.common.xcontent.DeprecationHandler;
-import org.opensearch.common.xcontent.NamedXContentRegistry;
-import org.opensearch.common.xcontent.ToXContentFragment;
-import org.opensearch.common.xcontent.XContentBuilder;
 import org.opensearch.common.xcontent.XContentFactory;
 import org.opensearch.common.xcontent.XContentHelper;
-import org.opensearch.common.xcontent.XContentParser;
 import org.opensearch.common.xcontent.XContentType;
 import org.opensearch.common.xcontent.json.JsonXContent;
 import org.opensearch.common.xcontent.support.XContentMapValues;
+import org.opensearch.core.common.bytes.BytesArray;
+import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.xcontent.DeprecationHandler;
+import org.opensearch.core.xcontent.MediaType;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
+import org.opensearch.core.xcontent.ToXContentFragment;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -215,10 +217,10 @@ public class PutIndexTemplateRequest extends ClusterManagerNodeRequest<PutIndexT
      * Adds mapping that will be added when the index gets created.
      *
      * @param source The mapping source
-     * @param xContentType The type of content contained within the source
+     * @param mediaType The type of content contained within the source
      */
-    public PutIndexTemplateRequest mapping(String source, XContentType xContentType) {
-        internalMapping(XContentHelper.convertToMap(new BytesArray(source), true, xContentType).v2());
+    public PutIndexTemplateRequest mapping(String source, MediaType mediaType) {
+        internalMapping(XContentHelper.convertToMap(new BytesArray(source), true, mediaType).v2());
         return this;
     }
 
@@ -266,11 +268,12 @@ public class PutIndexTemplateRequest extends ClusterManagerNodeRequest<PutIndexT
 
     private PutIndexTemplateRequest internalMapping(Map<String, Object> source) {
         try {
-            XContentBuilder builder = XContentFactory.contentBuilder(XContentType.JSON);
+            XContentBuilder builder = MediaTypeRegistry.JSON.contentBuilder();
             builder.map(source);
-            Objects.requireNonNull(builder.contentType());
+            MediaType mediaType = builder.contentType();
+            Objects.requireNonNull(mediaType);
             try {
-                mappings = new BytesArray(XContentHelper.convertToJson(BytesReference.bytes(builder), false, false, builder.contentType()));
+                mappings = new BytesArray(XContentHelper.convertToJson(BytesReference.bytes(builder), false, false, mediaType));
                 return this;
             } catch (IOException e) {
                 throw new UncheckedIOException("failed to convert source to json", e);
@@ -342,7 +345,10 @@ public class PutIndexTemplateRequest extends ClusterManagerNodeRequest<PutIndexT
 
     /**
      * The template source definition.
+     *
+     * @deprecated use {@link #source(String, MediaType)} instead
      */
+    @Deprecated
     public PutIndexTemplateRequest source(String templateSource, XContentType xContentType) {
         return source(XContentHelper.convertToMap(xContentType.xContent(), templateSource, true));
     }
@@ -350,6 +356,16 @@ public class PutIndexTemplateRequest extends ClusterManagerNodeRequest<PutIndexT
     /**
      * The template source definition.
      */
+    public PutIndexTemplateRequest source(String templateSource, MediaType mediaType) {
+        return source(XContentHelper.convertToMap(mediaType.xContent(), templateSource, true));
+    }
+
+    /**
+     * The template source definition.
+     *
+     * @deprecated use {@link #source(byte[], MediaType)} instead
+     */
+    @Deprecated
     public PutIndexTemplateRequest source(byte[] source, XContentType xContentType) {
         return source(source, 0, source.length, xContentType);
     }
@@ -357,6 +373,16 @@ public class PutIndexTemplateRequest extends ClusterManagerNodeRequest<PutIndexT
     /**
      * The template source definition.
      */
+    public PutIndexTemplateRequest source(byte[] source, MediaType mediaType) {
+        return source(source, 0, source.length, mediaType);
+    }
+
+    /**
+     * The template source definition.
+     *
+     * @deprecated use {@link #source(byte[], int, int, MediaType)} instead
+     */
+    @Deprecated
     public PutIndexTemplateRequest source(byte[] source, int offset, int length, XContentType xContentType) {
         return source(new BytesArray(source, offset, length), xContentType);
     }
@@ -364,8 +390,25 @@ public class PutIndexTemplateRequest extends ClusterManagerNodeRequest<PutIndexT
     /**
      * The template source definition.
      */
+    public PutIndexTemplateRequest source(byte[] source, int offset, int length, MediaType mediaType) {
+        return source(new BytesArray(source, offset, length), mediaType);
+    }
+
+    /**
+     * The template source definition.
+     *
+     * @deprecated use {@link #source(BytesReference, MediaType)} instead
+     */
+    @Deprecated
     public PutIndexTemplateRequest source(BytesReference source, XContentType xContentType) {
         return source(XContentHelper.convertToMap(source, true, xContentType).v2());
+    }
+
+    /**
+     * The template source definition.
+     */
+    public PutIndexTemplateRequest source(BytesReference source, MediaType mediaType) {
+        return source(XContentHelper.convertToMap(source, true, mediaType).v2());
     }
 
     public Set<Alias> aliases() {

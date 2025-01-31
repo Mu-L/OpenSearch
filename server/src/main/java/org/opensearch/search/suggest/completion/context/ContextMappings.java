@@ -39,8 +39,8 @@ import org.apache.lucene.util.CharsRef;
 import org.apache.lucene.util.CharsRefBuilder;
 import org.opensearch.OpenSearchParseException;
 import org.opensearch.Version;
-import org.opensearch.common.xcontent.ToXContent;
-import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.ToXContent;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.index.mapper.CompletionFieldMapper;
 import org.opensearch.index.mapper.DocumentMapperParser;
 import org.opensearch.index.mapper.ParseContext;
@@ -124,11 +124,11 @@ public class ContextMappings implements ToXContent, Iterable<ContextMapping<?>> 
      * Field prepends context values with a suggestion
      * Context values are associated with a type, denoted by
      * a type id, which is prepended to the context value.
-     *
+     * <p>
      * Every defined context mapping yields a unique type id (index of the
      * corresponding context mapping in the context mappings list)
      * for all its context values
-     *
+     * <p>
      * The type, context and suggestion values are encoded as follows:
      * <p>
      *     TYPE_ID | CONTEXT_VALUE | CONTEXT_SEP | SUGGESTION_VALUE
@@ -209,7 +209,7 @@ public class ContextMappings implements ToXContent, Iterable<ContextMapping<?>> 
 
     /**
      * Maps an output context list to a map of context mapping names and their values
-     *
+     * <p>
      * see {@link org.opensearch.search.suggest.completion.context.ContextMappings.TypedContextField}
      * @return a map of context names and their values
      *
@@ -232,7 +232,7 @@ public class ContextMappings implements ToXContent, Iterable<ContextMapping<?>> 
 
     /**
      * Loads {@link ContextMappings} from configuration
-     *
+     * <p>
      * Expected configuration:
      *  List of maps representing {@link ContextMapping}
      *  [{"name": .., "type": .., ..}, {..}]
@@ -286,7 +286,7 @@ public class ContextMappings implements ToXContent, Iterable<ContextMapping<?>> 
 
     /**
      * Writes a list of objects specified by the defined {@link ContextMapping}s
-     *
+     * <p>
      * see {@link ContextMapping#toXContent(XContentBuilder, Params)}
      */
     @Override

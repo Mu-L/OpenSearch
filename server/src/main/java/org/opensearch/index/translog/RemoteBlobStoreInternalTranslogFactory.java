@@ -8,6 +8,8 @@
 
 package org.opensearch.index.translog;
 
+import org.opensearch.index.remote.RemoteTranslogTransferTracker;
+import org.opensearch.indices.RemoteStoreSettings;
 import org.opensearch.repositories.RepositoriesService;
 import org.opensearch.repositories.Repository;
 import org.opensearch.repositories.RepositoryMissingException;
@@ -15,7 +17,7 @@ import org.opensearch.repositories.blobstore.BlobStoreRepository;
 import org.opensearch.threadpool.ThreadPool;
 
 import java.io.IOException;
-import java.util.concurrent.ExecutorService;
+import java.util.function.BooleanSupplier;
 import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -29,12 +31,18 @@ public class RemoteBlobStoreInternalTranslogFactory implements TranslogFactory {
 
     private final Repository repository;
 
-    private final ExecutorService executorService;
+    private final ThreadPool threadPool;
+
+    private final RemoteTranslogTransferTracker remoteTranslogTransferTracker;
+
+    private final RemoteStoreSettings remoteStoreSettings;
 
     public RemoteBlobStoreInternalTranslogFactory(
         Supplier<RepositoriesService> repositoriesServiceSupplier,
         ThreadPool threadPool,
-        String repositoryName
+        String repositoryName,
+        RemoteTranslogTransferTracker remoteTranslogTransferTracker,
+        RemoteStoreSettings remoteStoreSettings
     ) {
         Repository repository;
         try {
@@ -43,7 +51,9 @@ public class RemoteBlobStoreInternalTranslogFactory implements TranslogFactory {
             throw new IllegalArgumentException("Repository should be created before creating index with remote_store enabled setting", ex);
         }
         this.repository = repository;
-        this.executorService = threadPool.executor(ThreadPool.Names.TRANSLOG_TRANSFER);
+        this.threadPool = threadPool;
+        this.remoteTranslogTransferTracker = remoteTranslogTransferTracker;
+        this.remoteStoreSettings = remoteStoreSettings;
     }
 
     @Override
@@ -53,20 +63,44 @@ public class RemoteBlobStoreInternalTranslogFactory implements TranslogFactory {
         TranslogDeletionPolicy deletionPolicy,
         LongSupplier globalCheckpointSupplier,
         LongSupplier primaryTermSupplier,
-        LongConsumer persistedSequenceNumberConsumer
+        LongConsumer persistedSequenceNumberConsumer,
+        BooleanSupplier startedPrimarySupplier
     ) throws IOException {
 
         assert repository instanceof BlobStoreRepository : "repository should be instance of BlobStoreRepository";
         BlobStoreRepository blobStoreRepository = ((BlobStoreRepository) repository);
-        return new RemoteFsTranslog(
-            config,
-            translogUUID,
-            deletionPolicy,
-            globalCheckpointSupplier,
-            primaryTermSupplier,
-            persistedSequenceNumberConsumer,
-            blobStoreRepository,
-            executorService
-        );
+        if (RemoteStoreSettings.isPinnedTimestampsEnabled()) {
+            return new RemoteFsTimestampAwareTranslog(
+                config,
+                translogUUID,
+                deletionPolicy,
+                globalCheckpointSupplier,
+                primaryTermSupplier,
+                persistedSequenceNumberConsumer,
+                blobStoreRepository,
+                threadPool,
+                startedPrimarySupplier,
+                remoteTranslogTransferTracker,
+                remoteStoreSettings
+            );
+        } else {
+            return new RemoteFsTranslog(
+                config,
+                translogUUID,
+                deletionPolicy,
+                globalCheckpointSupplier,
+                primaryTermSupplier,
+                persistedSequenceNumberConsumer,
+                blobStoreRepository,
+                threadPool,
+                startedPrimarySupplier,
+                remoteTranslogTransferTracker,
+                remoteStoreSettings
+            );
+        }
+    }
+
+    public Repository getRepository() {
+        return repository;
     }
 }

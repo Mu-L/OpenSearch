@@ -34,8 +34,8 @@ package org.opensearch.test.rest.yaml.section;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.common.collect.Tuple;
-import org.opensearch.common.xcontent.XContentLocation;
-import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.core.xcontent.XContentLocation;
+import org.opensearch.core.xcontent.XContentParser;
 
 import java.io.IOException;
 
@@ -46,7 +46,7 @@ import static org.junit.Assert.fail;
 
 /**
  * Represents a lt assert section:
- *
+ * <p>
  *  - lt:    { fields._ttl: 20000}
  *
  */
@@ -72,6 +72,7 @@ public class LessThanAssertion extends Assertion {
     @Override
     protected void doAssert(Object actualValue, Object expectedValue) {
         logger.trace("assert that [{}] is less than [{}] (field: [{}])", actualValue, expectedValue, getField());
+        actualValue = convertActualValue(actualValue, expectedValue);
         assertThat(
             "value of [" + getField() + "] is not comparable (got [" + safeClass(actualValue) + "])",
             actualValue,

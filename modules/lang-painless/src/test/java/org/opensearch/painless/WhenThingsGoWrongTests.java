@@ -32,12 +32,13 @@
 
 package org.opensearch.painless;
 
-import junit.framework.AssertionFailedError;
 import org.apache.lucene.util.Constants;
 import org.opensearch.script.ScriptException;
 
 import java.lang.invoke.WrongMethodTypeException;
 import java.util.Collections;
+
+import junit.framework.AssertionFailedError;
 
 import static java.util.Collections.emptyMap;
 import static java.util.Collections.singletonMap;
@@ -57,10 +58,9 @@ public class WhenThingsGoWrongTests extends ScriptTestCase {
     public void testScriptStack() {
         for (String type : new String[] { "String", "def   " }) {
             // trigger NPE at line 1 of the script
-            ScriptException exception = expectThrows(
-                ScriptException.class,
-                () -> { exec(type + " x = null; boolean y = x.isEmpty();\n" + "return y;"); }
-            );
+            ScriptException exception = expectThrows(ScriptException.class, () -> {
+                exec(type + " x = null; boolean y = x.isEmpty();\n" + "return y;");
+            });
             // null deref at x.isEmpty(), the '.' is offset 30
             assertScriptElementColumn(30, exception);
             assertScriptStack(exception, "y = x.isEmpty();\n", "     ^---- HERE");
@@ -84,12 +84,9 @@ public class WhenThingsGoWrongTests extends ScriptTestCase {
             assertThat(exception.getCause(), instanceOf(NullPointerException.class));
 
             // trigger NPE at line 4 in script (inside conditional)
-            exception = expectThrows(
-                ScriptException.class,
-                () -> {
-                    exec(type + " x = null;\n" + "boolean y = false;\n" + "if (!y) {\n" + "  y = x.isEmpty();\n" + "}\n" + "return y;");
-                }
-            );
+            exception = expectThrows(ScriptException.class, () -> {
+                exec(type + " x = null;\n" + "boolean y = false;\n" + "if (!y) {\n" + "  y = x.isEmpty();\n" + "}\n" + "return y;");
+            });
             // null deref at x.isEmpty(), the '.' is offset 53
             assertScriptElementColumn(53, exception);
             assertScriptStack(exception, "y = x.isEmpty();\n}\n", "     ^---- HERE");
@@ -121,10 +118,9 @@ public class WhenThingsGoWrongTests extends ScriptTestCase {
     }
 
     public void testBogusParameter() {
-        IllegalArgumentException expected = expectThrows(
-            IllegalArgumentException.class,
-            () -> { exec("return 5;", null, Collections.singletonMap("bogusParameterKey", "bogusParameterValue"), true); }
-        );
+        IllegalArgumentException expected = expectThrows(IllegalArgumentException.class, () -> {
+            exec("return 5;", null, Collections.singletonMap("bogusParameterKey", "bogusParameterValue"), true);
+        });
         assertTrue(expected.getMessage().contains("Unrecognized compile-time parameter"));
     }
 
@@ -178,10 +174,9 @@ public class WhenThingsGoWrongTests extends ScriptTestCase {
     }
 
     public void testIllegalDynamicMethod() {
-        IllegalArgumentException expected = expectScriptThrows(
-            IllegalArgumentException.class,
-            () -> { exec("def x = 'test'; return x.getClass().toString()"); }
-        );
+        IllegalArgumentException expected = expectScriptThrows(IllegalArgumentException.class, () -> {
+            exec("def x = 'test'; return x.getClass().toString()");
+        });
         assertTrue(expected.getMessage().contains("dynamic method [java.lang.String, getClass/0] not found"));
     }
 
@@ -359,6 +354,9 @@ public class WhenThingsGoWrongTests extends ScriptTestCase {
         assertEquals(iae.getMessage(), "invalid assignment: cannot assign a value to addition operation [+]");
         iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("Double.x() = 1;"));
         assertEquals(iae.getMessage(), "invalid assignment: cannot assign a value to method call [x/0]");
+
+        expectScriptThrows(UnsupportedOperationException.class, () -> exec("params['modifyingParamsMap'] = 2;"));
+        expectScriptThrows(UnsupportedOperationException.class, () -> exec("params.modifyingParamsMap = 2;"));
     }
 
     public void testCannotResolveSymbol() {

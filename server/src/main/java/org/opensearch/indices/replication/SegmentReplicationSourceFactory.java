@@ -11,8 +11,8 @@ package org.opensearch.indices.replication;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.cluster.service.ClusterService;
+import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.index.shard.IndexShard;
-import org.opensearch.index.shard.ShardId;
 import org.opensearch.indices.recovery.RecoverySettings;
 import org.opensearch.transport.TransportService;
 
@@ -38,17 +38,25 @@ public class SegmentReplicationSourceFactory {
     }
 
     public SegmentReplicationSource get(IndexShard shard) {
-        return new PrimaryShardReplicationSource(
-            shard.recoveryState().getTargetNode(),
-            shard.routingEntry().allocationId().getId(),
-            transportService,
-            recoverySettings,
-            getPrimaryNode(shard.shardId())
-        );
+        if (shard.indexSettings().isAssignedOnRemoteNode()) {
+            return new RemoteStoreReplicationSource(shard);
+        } else {
+            return new PrimaryShardReplicationSource(
+                shard.recoveryState().getTargetNode(),
+                shard.routingEntry().allocationId().getId(),
+                transportService,
+                recoverySettings,
+                getPrimaryNode(shard.shardId())
+            );
+        }
     }
 
     private DiscoveryNode getPrimaryNode(ShardId shardId) {
         ShardRouting primaryShard = clusterService.state().routingTable().shardRoutingTable(shardId).primaryShard();
-        return clusterService.state().nodes().get(primaryShard.currentNodeId());
+        DiscoveryNode node = clusterService.state().nodes().get(primaryShard.currentNodeId());
+        if (node == null) {
+            throw new IllegalStateException("Cannot replicate, primary shard for " + shardId + " is not allocated on any node");
+        }
+        return node;
     }
 }

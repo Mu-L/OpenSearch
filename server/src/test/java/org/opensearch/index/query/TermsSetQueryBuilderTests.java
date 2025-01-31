@@ -52,7 +52,6 @@ import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.Directory;
 import org.opensearch.action.admin.indices.mapping.put.PutMappingRequest;
-import org.opensearch.common.Strings;
 import org.opensearch.common.compress.CompressedXContent;
 import org.opensearch.index.fielddata.ScriptDocValues;
 import org.opensearch.index.mapper.MapperService;
@@ -93,7 +92,7 @@ public class TermsSetQueryBuilderTests extends AbstractQueryTestCase<TermsSetQue
         String docType = "_doc";
         mapperService.merge(
             docType,
-            new CompressedXContent(Strings.toString(PutMappingRequest.simpleMapping("m_s_m", "type=long"))),
+            new CompressedXContent(PutMappingRequest.simpleMapping("m_s_m", "type=long").toString()),
             MapperService.MergeReason.MAPPING_UPDATE
         );
     }
@@ -254,7 +253,7 @@ public class TermsSetQueryBuilderTests extends AbstractQueryTestCase<TermsSetQue
                     .doToQuery(context);
                 IndexSearcher searcher = new IndexSearcher(ir);
                 TopDocs topDocs = searcher.search(query, 10, new Sort(SortField.FIELD_DOC));
-                assertThat(topDocs.totalHits.value, equalTo(3L));
+                assertThat(topDocs.totalHits.value(), equalTo(3L));
                 assertThat(topDocs.scoreDocs[0].doc, equalTo(1));
                 assertThat(topDocs.scoreDocs[1].doc, equalTo(3));
                 assertThat(topDocs.scoreDocs[2].doc, equalTo(4));
@@ -300,7 +299,7 @@ public class TermsSetQueryBuilderTests extends AbstractQueryTestCase<TermsSetQue
                     .doToQuery(context);
                 IndexSearcher searcher = new IndexSearcher(ir);
                 TopDocs topDocs = searcher.search(query, 10, new Sort(SortField.FIELD_DOC));
-                assertThat(topDocs.totalHits.value, equalTo(3L));
+                assertThat(topDocs.totalHits.value(), equalTo(3L));
                 assertThat(topDocs.scoreDocs[0].doc, equalTo(0));
                 assertThat(topDocs.scoreDocs[1].doc, equalTo(2));
                 assertThat(topDocs.scoreDocs[2].doc, equalTo(4));
